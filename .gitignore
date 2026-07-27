@@ -1,0 +1,52 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies
+node_modules
+
+# Build output
+dist
+dist-ssr
+*.local
+
+# Rust / Tauri build artifacts (auto-generated, can be very large — 9GB+)
+src-tauri/target
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+!.env.production.example
+src-tauri/target/
+*.log
+*.p12
+*.cer
+*.p8
+*.mobileprovision
+.DS_Store
+__pycache__/
+*.pyc
+automation-sidecar/bin/*
+!automation-sidecar/bin/.gitkeep
+automation-sidecar/browsers/*
+!automation-sidecar/browsers/.gitkeep
+automation-sidecar/build/
+automation-sidecar/dist/
+*.spec
