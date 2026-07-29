@@ -5,6 +5,8 @@ use std::sync::Mutex;
 use tauri::{Manager, State};
 use std::net::TcpStream;
 use std::time::Duration;
+
+
 struct AutomationChild {
     process: Child,
 }
@@ -213,6 +215,8 @@ fn start_automation_sidecar(app: tauri::AppHandle, state: State<'_, AutomationPr
     } else {
         (Stdio::null(), Stdio::null())
     };
+
+
 
     let mut spawned = command
         .env("PLAYWRIGHT_BROWSERS_PATH", &active_browser_dir)

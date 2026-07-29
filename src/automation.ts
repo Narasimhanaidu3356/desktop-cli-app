@@ -104,6 +104,7 @@ export const automation = {
   stop() { return localRequest<{ status: string }>("/stop", { method: "POST" }); },
   resume() { return localRequest<{ status: string }>("/manual/resume", { method: "POST" }); },
   skip() { return localRequest<{ status: string }>("/manual/skip", { method: "POST" }); },
+  history() { return localRequest<any[]>("/history", { method: "GET" }); },
 };
 
 declare global {

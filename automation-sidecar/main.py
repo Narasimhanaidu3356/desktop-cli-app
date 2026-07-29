@@ -107,6 +107,12 @@ SESSION_DIR = Path(os.getenv("TALENTSCREEN_SESSION_DIR") or get_secure_resume_di
 SESSION_DIR.mkdir(parents=True, exist_ok=True)
 PROFILE_PATH = SESSION_DIR / "profile.json"
 PDF_PATH = SESSION_DIR / "resume.pdf"
+HISTORY_PATH = SESSION_DIR / "history.json"
+if not HISTORY_PATH.exists():
+    try:
+        HISTORY_PATH.write_text("[]", encoding="utf-8")
+    except Exception:
+        pass
 
 app = FastAPI(title="TalentScreen Local Automation", docs_url=None, redoc_url=None)
 app.add_middleware(
@@ -122,12 +128,62 @@ _running = False
 _lock = threading.Lock()
 _stop = threading.Event()
 _manual_gate = ManualGate()
+_active_jobs: dict[str, dict[str, Any]] = {}
+
+
+def _write_history_entry(job_id: str, status: str) -> None:
+    global _active_jobs
+    job = _active_jobs.get(job_id)
+    if not job:
+        return
+    
+    history_path = SESSION_DIR / "history.json"
+    history = []
+    if history_path.exists():
+        try:
+            history = json.loads(history_path.read_text(encoding="utf-8"))
+        except Exception:
+            history = []
+            
+    final_status = "submitted" if status == "submission_confirmed" else status
+    
+    # Check if this job is already in history, if so update it, otherwise append
+    found = False
+    for entry in history:
+        if entry.get("id") == job_id:
+            entry["status"] = final_status
+            entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+            found = True
+            break
+            
+    if not found:
+        history.append({
+            "id": job_id,
+            "title": job.get("title", ""),
+            "company": job.get("company", ""),
+            "location": job.get("location", ""),
+            "ats": job.get("ats", ""),
+            "url": job.get("url", ""),
+            "status": final_status,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+        
+    try:
+        history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
+    except Exception as exc:
+        print(f"Failed to write history: {exc}")
 
 
 def emit(event_type: str, message: str, **extra: Any) -> None:
     with _lock:
         _events.append({"type": event_type, "message": message,
                         "timestamp": datetime.now(timezone.utc).isoformat(), **extra})
+    
+    # Persistent history recording on terminal job statuses
+    job_id = extra.get("jobId")
+    status = extra.get("status")
+    if job_id and status in ("submission_confirmed", "skipped", "failed", "stopped"):
+        _write_history_entry(job_id, status)
 
 
 class Answers(BaseModel):
@@ -209,13 +265,14 @@ def _run_batch(run_id: str, jobs: list[JobPayload]) -> None:
 
 @app.post("/api/batch")
 def start_batch(payload: BatchRequest) -> dict[str, str]:
-    global _running
+    global _running, _active_jobs
     if _running:
         raise HTTPException(status_code=409, detail="An automation run is already active")
     if not PROFILE_PATH.exists() or not PDF_PATH.exists():
         raise HTTPException(status_code=412, detail="Upload a JSON and PDF resume first")
     with _lock:
         _events.clear()
+        _active_jobs = {job.id: job.model_dump() for job in payload.jobs}
     _stop.clear()
     _running = True
     run_id = str(uuid.uuid4())
@@ -230,6 +287,17 @@ def events(cursor: int = 0) -> dict[str, Any]:
         rows = _events[max(0, cursor):]
         next_cursor = len(_events)
     return {"events": rows, "cursor": next_cursor, "running": _running}
+
+
+@app.get("/api/history")
+def get_history() -> list[dict[str, Any]]:
+    history_path = SESSION_DIR / "history.json"
+    if not history_path.exists():
+        return []
+    try:
+        return json.loads(history_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
 
 
 @app.post("/api/stop")

@@ -19,6 +19,8 @@ export default function App() {
   const [running, setRunning] = useState(false);
   const [events, setEvents] = useState<AutomationEvent[]>([]);
   const [jobStates, setJobStates] = useState<Record<string, string>>({});
+  const [currentBatchIds, setCurrentBatchIds] = useState<string[]>([]);
+  const [currentView, setCurrentView] = useState<"dashboard" | "history">("dashboard");
   const [showResults, setShowResults] = useState(false);
   const [error, setError] = useState("");
   const cursor = useRef(0);
@@ -27,12 +29,50 @@ export default function App() {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
   }, [dark]);
 
+  const reloadHistory = () => {
+    if (session && resume) {
+      api.history().then(setHistory).catch(() => setHistory([]));
+    }
+  };
+
   useEffect(() => {
     if (session && resume) {
       api.jobs().then(setJobs).catch((e) => setError(e.message));
-      api.history().then(setHistory).catch(() => setHistory([]));
+      reloadHistory();
     }
   }, [session, resume]);
+
+  // Load stored job states when the user session changes
+  useEffect(() => {
+    if (session) {
+      try {
+        const stored = localStorage.getItem(`talentscreen_job_states_${session.profile.email}`);
+        if (stored) {
+          setJobStates(JSON.parse(stored));
+        } else {
+          setJobStates({});
+        }
+      } catch (e) {
+        console.error("Failed to load stored job states", e);
+      }
+    } else {
+      setJobStates({});
+    }
+  }, [session]);
+
+  // Persist job states to localStorage whenever they change
+  useEffect(() => {
+    if (session) {
+      localStorage.setItem(`talentscreen_job_states_${session.profile.email}`, JSON.stringify(jobStates));
+    }
+  }, [jobStates, session]);
+
+  // Refresh history automatically when switching to the history tab
+  useEffect(() => {
+    if (currentView === "history") {
+      reloadHistory();
+    }
+  }, [currentView]);
 
   useEffect(() => {
     if (!running) return;
@@ -50,6 +90,7 @@ export default function App() {
         if (!result.running) {
           setRunning(false);
           setShowResults(true);
+          reloadHistory(); // Refresh history log on run completion
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Lost automation connection");
@@ -73,7 +114,15 @@ export default function App() {
   async function applyAll() {
     setError("");
     setShowResults(false);
-    setJobStates({});
+    const ids = filtered.map((j) => j.id);
+    setCurrentBatchIds(ids);
+    setJobStates((old) => {
+      const updated = { ...old };
+      for (const id of ids) {
+        updated[id] = "opening_browser";
+      }
+      return updated;
+    });
     setEvents([]);
     cursor.current = 0;
     try {
@@ -101,6 +150,7 @@ export default function App() {
     ]);
     setRunning(false);
     setShowResults(true);
+    reloadHistory();
   }
 
   async function resumeAutomation() {
@@ -140,7 +190,7 @@ export default function App() {
           if (name) {
             setSession({
               ...session,
-              profile: { ...session.profile, fullName: name, resume: { fileName: value.pdfFileName } },
+              profile: { ...session.profile, fullName: session.profile.fullName || name, resume: { fileName: value.pdfFileName } },
             });
           }
         }}
@@ -151,8 +201,10 @@ export default function App() {
   if (showResults) {
     return (
       <ResultsView
-        jobs={jobs}
-        jobStates={jobStates}
+        jobs={jobs.filter((j) => currentBatchIds.includes(j.id))}
+        jobStates={Object.fromEntries(
+          Object.entries(jobStates).filter(([id]) => currentBatchIds.includes(id))
+        )}
         events={events}
         onBack={() => setShowResults(false)}
       />
@@ -190,6 +242,9 @@ export default function App() {
       onApplyAll={applyAll}
       onStop={stop}
       onLogout={handleLogout}
+      currentView={currentView}
+      onViewChange={setCurrentView}
+      history={history}
     />
   );
 }

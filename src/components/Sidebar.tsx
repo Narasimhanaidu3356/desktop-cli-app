@@ -1,6 +1,11 @@
-import { Compass } from "lucide-react";
+import { Compass, History } from "lucide-react";
 
-export function Sidebar() {
+interface SidebarProps {
+  currentView: "dashboard" | "history";
+  onViewChange: (view: "dashboard" | "history") => void;
+}
+
+export function Sidebar({ currentView, onViewChange }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -12,9 +17,19 @@ export function Sidebar() {
       </div>
 
       <nav>
-        <button className="active">
+        <button 
+          className={currentView === "dashboard" ? "active" : ""} 
+          onClick={() => onViewChange("dashboard")}
+        >
           <Compass size={20} />
           Job dashboard
+        </button>
+        <button 
+          className={currentView === "history" ? "active" : ""} 
+          onClick={() => onViewChange("history")}
+        >
+          <History size={20} />
+          Application History
         </button>
       </nav>
     </aside>

@@ -1,6 +1,7 @@
 import type { ApplicationSession, AuthSession, CandidateProfile, Job } from "./contracts";
 import { demoCandidate, demoHistory, demoJobs } from "./mockData";
 import { detectSupportedAts } from "./ats";
+import { automation } from "./automation";
 
 const API_URL = import.meta.env.VITE_WBL_API_URL || "https://api.whitebox-learning.com/api";
 const USE_MOCK = import.meta.env.VITE_USE_MOCK_DATA !== "false";
@@ -158,8 +159,30 @@ export const api = {
 
   async history(): Promise<ApplicationSession[]> {
     if (USE_MOCK) return demoHistory;
-    if (!USE_APPLICATION_API) return localHistory();
-    return request<ApplicationSession[]>("/talentscreen/applications");
+    try {
+      const localHist = await automation.history();
+      return localHist.map((item: any) => {
+        const jobDetails = item.job || item;
+        return {
+          id: item.id,
+          job: {
+            id: jobDetails.id || item.id,
+            title: jobDetails.title || "Unknown Position",
+            company: jobDetails.company || "Unknown Company",
+            location: jobDetails.location || "",
+            ats: jobDetails.ats || "greenhouse",
+            url: jobDetails.url || "",
+          },
+          status: item.status,
+          createdAt: item.timestamp,
+          updatedAt: item.timestamp,
+        };
+      });
+    } catch (e) {
+      console.error("Failed to load history from sidecar:", e);
+      if (!USE_APPLICATION_API) return localHistory();
+      return request<ApplicationSession[]>("/talentscreen/applications");
+    }
   },
 
   async createApplication(job: Job): Promise<ApplicationSession> {

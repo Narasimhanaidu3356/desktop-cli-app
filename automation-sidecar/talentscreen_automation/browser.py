@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from playwright.sync_api import Browser, Locator, Page, TimeoutError as PlaywrightTimeout, sync_playwright
+from playwright.sync_api import Browser, FrameLocator, Locator, Page, TimeoutError as PlaywrightTimeout, sync_playwright
 
 from .profile import CandidateProfile
 from .rules import answer_for, best_option, normalize
@@ -156,8 +156,21 @@ def _fill_custom_select(control: Locator, answer: str) -> bool:
     return False
 
 
-def _resume_is_attached(page: Page, resume_path: Path | None = None) -> bool:
-    inputs = page.locator('input[type="file"]')
+def _get_target_context(page: Page, ats_type: str | None) -> Page | FrameLocator:
+    """Return the FrameLocator if the ATS form is embedded in an iframe, otherwise page."""
+    if ats_type == "greenhouse":
+        iframe = page.locator('iframe[src*="greenhouse.io"], iframe#grnhse_iframe').first
+        if iframe.count() and iframe.is_visible():
+            return page.frame_locator('iframe[src*="greenhouse.io"], iframe#grnhse_iframe')
+    elif ats_type == "lever":
+        iframe = page.locator('iframe[src*="lever.co"], iframe#lever_iframe').first
+        if iframe.count() and iframe.is_visible():
+            return page.frame_locator('iframe[src*="lever.co"], iframe#lever_iframe')
+    return page
+
+
+def _resume_is_attached(container: Page | FrameLocator, resume_path: Path | None = None) -> bool:
+    inputs = container.locator('input[type="file"]')
     for index in range(inputs.count()):
         try:
             if inputs.nth(index).evaluate("el => Boolean(el.files && el.files.length)"):
@@ -166,8 +179,8 @@ def _resume_is_attached(page: Page, resume_path: Path | None = None) -> bool:
             continue
     if resume_path is not None:
         try:
-            filename = page.get_by_text(resume_path.name, exact=False)
-            upload_error = page.get_by_text(re.compile(r"uploadFile|upload failed|could not upload", re.I))
+            filename = container.get_by_text(resume_path.name, exact=False)
+            upload_error = container.get_by_text(re.compile(r"uploadFile|upload failed|could not upload", re.I))
             if filename.count() and not any(
                 upload_error.nth(index).is_visible() for index in range(upload_error.count())
             ):
@@ -177,35 +190,37 @@ def _resume_is_attached(page: Page, resume_path: Path | None = None) -> bool:
     return False
 
 
-def _attach_resume(page: Page, resume_path: Path, emit: Emit, job_id: str) -> bool:
+def _attach_resume(page: Page, container: Page | FrameLocator, resume_path: Path, emit: Emit, job_id: str) -> bool:
     """Upload through the ATS widget first so its framework state is initialized."""
-    if _resume_is_attached(page, resume_path):
+    if _resume_is_attached(container, resume_path):
         return False
 
-    triggers = page.get_by_role(
-        "button", name=re.compile(r"^(attach|upload( resume| cv)?|choose file|browse)$", re.I)
-    ).or_(page.get_by_text(re.compile(r"^(attach|upload( resume| cv)?|choose file|browse)$", re.I)))
-    for index in range(triggers.count()):
-        trigger = triggers.nth(index)
-        try:
-            if not trigger.is_visible() or not trigger.is_enabled():
+    # For Greenhouse URLs, we skip the button triggers completely to avoid JavaScript upload crashes
+    if not is_greenhouse_url(page.url):
+        triggers = container.get_by_role(
+            "button", name=re.compile(r"^(attach|upload( resume| cv)?|choose file|browse)$", re.I)
+        ).or_(container.get_by_text(re.compile(r"^(attach|upload( resume| cv)?|choose file|browse)$", re.I)))
+        for index in range(triggers.count()):
+            trigger = triggers.nth(index)
+            try:
+                if not trigger.is_visible() or not trigger.is_enabled():
+                    continue
+                context = normalize(_label(trigger) + " " + trigger.inner_text())
+                if "cover letter" in context or "dropbox" in context or "manually" in context:
+                    continue
+                with page.expect_file_chooser(timeout=2500) as chooser:
+                    trigger.click()
+                chooser.value.set_files(str(resume_path))
+                page.wait_for_timeout(1000)
+                if _resume_is_attached(container, resume_path):
+                    emit("log", "Attached the PDF resume through the ATS upload control.",
+                         jobId=job_id, status="filling")
+                    return True
+            except Exception:
                 continue
-            context = normalize(_label(trigger) + " " + trigger.inner_text())
-            if "cover letter" in context or "dropbox" in context or "manually" in context:
-                continue
-            with page.expect_file_chooser(timeout=2500) as chooser:
-                trigger.click()
-            chooser.value.set_files(str(resume_path))
-            page.wait_for_timeout(1000)
-            if _resume_is_attached(page, resume_path):
-                emit("log", "Attached the PDF resume through the ATS upload control.",
-                     jobId=job_id, status="filling")
-                return True
-        except Exception:
-            continue
 
     # Fallback for conventional/hidden inputs used by Lever and older forms.
-    file_inputs = page.locator('input[type="file"]')
+    file_inputs = container.locator('input[type="file"]')
     for index in range(file_inputs.count()):
         control = file_inputs.nth(index)
         try:
@@ -247,11 +262,12 @@ def _fill_pass(page: Page, profile: CandidateProfile, resume_path: Path, emit: E
     runs afterwards as a safety net for any fields the strategy missed.
     """
     changed = 0
+    container = _get_target_context(page, ats_type)
 
     # ── ATS-specific strategy pass ──────────────────────────────────────────
     if ats_type == "greenhouse":
         try:
-            ats_changed = fill_greenhouse(page, profile, resume_path)
+            ats_changed = fill_greenhouse(page, container, profile, resume_path)
             if ats_changed:
                 emit("log", f"Greenhouse strategy filled {ats_changed} fields.",
                      jobId=job_id, status="filling")
@@ -261,7 +277,7 @@ def _fill_pass(page: Page, profile: CandidateProfile, resume_path: Path, emit: E
                  jobId=job_id, status="filling")
     elif ats_type == "lever":
         try:
-            ats_changed = fill_lever(page, profile, resume_path)
+            ats_changed = fill_lever(page, container, profile, resume_path)
             if ats_changed:
                 emit("log", f"Lever strategy filled {ats_changed} fields.",
                      jobId=job_id, status="filling")
@@ -271,9 +287,9 @@ def _fill_pass(page: Page, profile: CandidateProfile, resume_path: Path, emit: E
                  jobId=job_id, status="filling")
 
     # ── Generic pass (resume attachment + remaining fields) ─────────────────
-    changed += int(_attach_resume(page, resume_path, emit, job_id))
+    changed += int(_attach_resume(page, container, resume_path, emit, job_id))
 
-    controls = page.locator(
+    controls = container.locator(
         'input:not([type="hidden"]):not([type="file"]):not([type="submit"]):not([type="button"]), textarea, select'
     )
     radio_names: set[str] = set()
@@ -301,7 +317,7 @@ def _fill_pass(page: Page, profile: CandidateProfile, resume_path: Path, emit: E
         else:
             changed += int(_fill_text(control, answer))
 
-    custom = page.locator('[role="combobox"]:visible, button[aria-haspopup="listbox"]:visible')
+    custom = container.locator('[role="combobox"]:visible, button[aria-haspopup="listbox"]:visible')
     for index in range(custom.count()):
         control = custom.nth(index)
         current = (control.get_attribute("value") or control.inner_text()).strip()
@@ -315,43 +331,47 @@ def _fill_pass(page: Page, profile: CandidateProfile, resume_path: Path, emit: E
     return changed
 
 
-def _click_apply(page: Page) -> None:
-    if page.locator('form input, form textarea, form select').count():
+def _click_apply(page: Page, container: Page | FrameLocator) -> None:
+    if container.locator('form input, form textarea, form select').count():
         return
     candidates = page.get_by_role("link", name=re.compile(r"^(apply|apply now|apply for this job)$", re.I)).or_(
         page.get_by_role("button", name=re.compile(r"^(apply|apply now|apply for this job)$", re.I)))
     if candidates.count():
         candidates.first.click()
-        page.wait_for_load_state("domcontentloaded", timeout=15000)
+        try:
+            page.wait_for_load_state("load", timeout=10000)
+            page.wait_for_load_state("networkidle", timeout=4000)
+        except Exception:
+            pass
 
 
-def _captcha(page: Page) -> bool:
+def _captcha(container: Page | FrameLocator) -> bool:
     # CAPTCHA containers remain in the DOM even after the candidate solves
     # them. Treat a populated response token/checked box as complete and only
     # pause for an active, unsolved challenge.
-    responses = page.locator('textarea[name="g-recaptcha-response"], input[name="g-recaptcha-response"], textarea[name="h-captcha-response"]')
+    responses = container.locator('textarea[name="g-recaptcha-response"], input[name="g-recaptcha-response"], textarea[name="h-captcha-response"]')
     for index in range(responses.count()):
         try:
             if (responses.nth(index).input_value() or "").strip():
                 return False
         except Exception:
             continue
-    checked = page.locator('[role="checkbox"][aria-checked="true"], .recaptcha-checkbox-checked')
+    checked = container.locator('[role="checkbox"][aria-checked="true"], .recaptcha-checkbox-checked')
     if checked.count():
         return False
-    challenge = page.locator(
+    challenge = container.locator(
         'iframe[src*="recaptcha/api2/bframe" i]:visible, iframe[src*="hcaptcha.com/captcha" i]:visible, '
         '[role="dialog"] iframe[src*="captcha" i]:visible'
     )
     if challenge.count():
         return True
-    containers = page.locator('.g-recaptcha:visible, .h-captcha:visible, [class*="captcha" i]:visible')
+    containers = container.locator('.g-recaptcha:visible, .h-captcha:visible, [class*="captcha" i]:visible')
     return containers.count() > 0
 
 
-def _unresolved_required(page: Page) -> list[str]:
+def _unresolved_required(container: Page | FrameLocator) -> list[str]:
     result: list[str] = []
-    required_files = page.locator('input[type="file"][required], input[type="file"][aria-required="true"]')
+    required_files = container.locator('input[type="file"][required], input[type="file"][aria-required="true"]')
     for index in range(required_files.count()):
         item = required_files.nth(index)
         try:
@@ -359,7 +379,7 @@ def _unresolved_required(page: Page) -> list[str]:
                 result.append(_label(item) or "Required resume/document upload")
         except Exception:
             continue
-    controls = page.locator(
+    controls = container.locator(
         'input[required]:not([type="file"]):visible, textarea[required]:visible, select[required]:visible, '
         '[aria-required="true"]:not(input[type="file"]):visible'
     )
@@ -369,7 +389,7 @@ def _unresolved_required(page: Page) -> list[str]:
             kind = (item.get_attribute("type") or item.evaluate("el => el.tagName")).lower()
             if kind == "radio":
                 name = item.get_attribute("name") or ""
-                missing = not page.locator(f'input[type="radio"][name="{name}"]:checked').count() if name else not item.is_checked()
+                missing = not container.locator(f'input[type="radio"][name="{name}"]:checked').count() if name else not item.is_checked()
             elif kind == "checkbox":
                 missing = not item.is_checked()
             else:
@@ -383,9 +403,9 @@ def _unresolved_required(page: Page) -> list[str]:
     return result
 
 
-def _submit(page: Page) -> bool:
+def _submit(page: Page, container: Page | FrameLocator) -> bool:
     # Prefer semantic final-submit controls, then cover custom ATS buttons.
-    candidates = page.locator(
+    candidates = container.locator(
         'button[type="submit"], input[type="submit"], '
         'button:has-text("Submit"), button:has-text("Send Application"), '
         'button:has-text("Complete Application"), button:has-text("Finish"), '
@@ -457,15 +477,15 @@ def _wait_for_confirmation(page: Page, seconds: float = 15) -> bool:
     return False
 
 
-def _scroll_to_manual_target(page: Page) -> None:
+def _scroll_to_manual_target(page: Page, container: Page | FrameLocator) -> None:
     """Expose the control that needs human attention without touching CAPTCHA state."""
     try:
-        captcha = page.locator('iframe[src*="captcha" i]:visible, .g-recaptcha:visible, [class*="captcha" i]:visible')
+        captcha = container.locator('iframe[src*="captcha" i]:visible, .g-recaptcha:visible, [class*="captcha" i]:visible')
         if captcha.count():
             captcha.first.scroll_into_view_if_needed()
             return
 
-        required = page.locator(
+        required = container.locator(
             'input[required]:visible, textarea[required]:visible, select[required]:visible, '
             '[aria-required="true"]:visible'
         )
@@ -474,7 +494,7 @@ def _scroll_to_manual_target(page: Page) -> None:
             kind = (item.get_attribute("type") or item.evaluate("el => el.tagName")).lower()
             if kind == "radio":
                 name = item.get_attribute("name") or ""
-                missing = not page.locator(f'input[type="radio"][name="{name}"]:checked').count() if name else not item.is_checked()
+                missing = not container.locator(f'input[type="radio"][name="{name}"]:checked').count() if name else not item.is_checked()
             elif kind == "checkbox":
                 missing = not item.is_checked()
             else:
@@ -484,8 +504,8 @@ def _scroll_to_manual_target(page: Page) -> None:
                 item.evaluate("el => el.scrollIntoView({block: 'center', behavior: 'smooth'})")
                 return
 
-        submit = page.get_by_role("button", name=re.compile(r"^(submit application|submit|apply|verify)$", re.I)).or_(
-            page.locator('input[type="submit"]'))
+        submit = container.get_by_role("button", name=re.compile(r"^(submit application|submit|apply|verify)$", re.I)).or_(
+            container.locator('input[type="submit"]'))
         if submit.count() and submit.first.is_visible():
             submit.first.scroll_into_view_if_needed()
             submit.first.evaluate("el => el.scrollIntoView({block: 'center', behavior: 'smooth'})")
@@ -500,7 +520,9 @@ def _manual_action(page: Page, job: dict[str, Any], profile: CandidateProfile, r
                    emit: Emit, stop: threading.Event, gate: ManualGate, reason: str) -> str:
     job_id = job["id"]
     gate.begin(job_id)
-    _scroll_to_manual_target(page)
+    ats_type = _detect_ats_type(page.url, job.get("ats"))
+    container = _get_target_context(page, ats_type)
+    _scroll_to_manual_target(page, container)
     emit("job", reason + " Complete it in the browser, then click Resume automation.",
          jobId=job_id, status="manual_action_required")
     try:
@@ -523,20 +545,21 @@ def _manual_action(page: Page, job: dict[str, Any], profile: CandidateProfile, r
                 # Re-detect ATS type from the live page URL in case of redirect
                 current_url = page.url
                 ats_type = _detect_ats_type(current_url, job.get("ats"))
+                container = _get_target_context(page, ats_type)
                 for _ in range(2):
                     if _fill_pass(page, profile, resume_path, emit, job_id, ats_type=ats_type) == 0:
                         break
                     page.wait_for_timeout(250)
                 if _submission_confirmed(page):
                     continue
-                unresolved = _unresolved_required(page)
-                if unresolved or _captcha(page):
+                unresolved = _unresolved_required(container)
+                if unresolved or _captcha(container):
                     detail = "; ".join(unresolved[:4]) if unresolved else "CAPTCHA is still present"
                     emit("job", f"Manual action is still required: {detail}", jobId=job_id,
                          status="manual_action_required")
                     continue
                 emit("job", "Required fields are complete; submitting now.", jobId=job_id, status="submitting")
-                if not _submit(page) or not _wait_for_confirmation(page):
+                if not _submit(page, container) or not _wait_for_confirmation(page):
                     emit("job", "Submission is not confirmed. Submit manually, then click Resume automation.",
                          jobId=job_id, status="manual_action_required")
                     continue
@@ -568,11 +591,12 @@ def _process(page: Page, job: dict[str, Any], profile: CandidateProfile, resume_
     # Detect the ATS type so strategy-specific logic can be used.
     ats_type = _detect_ats_type(url, job.get("ats"))
     ats_label = ats_type.capitalize() if ats_type else "Generic"
+    container = _get_target_context(page, ats_type)
 
     emit("job", f"Opening {job['company']} — {job['title']} [{ats_label} strategy]",
          jobId=job_id, status="opening_browser")
     page.goto(url, wait_until="domcontentloaded", timeout=45000)
-    _click_apply(page)
+    _click_apply(page, container)
     if stop.is_set():
         raise AutomationCancelled()
     emit("job", f"Filling application using {ats_label} strategy.", jobId=job_id, status="filling")
@@ -581,26 +605,26 @@ def _process(page: Page, job: dict[str, Any], profile: CandidateProfile, resume_
         if _fill_pass(page, profile, resume_path, emit, job_id, ats_type=ats_type) == 0:
             break
         page.wait_for_timeout(350)
-    if _captcha(page):
+    if _captcha(container):
         _manual_action(page, job, profile, resume_path, emit, stop, gate,
                        "CAPTCHA requires manual completion.")
         return
     emit("job", "Validating required fields.", jobId=job_id, status="validating")
-    unresolved = _unresolved_required(page)
+    unresolved = _unresolved_required(container)
     if unresolved:
         preview = "; ".join(unresolved[:4])
         _manual_action(page, job, profile, resume_path, emit, stop, gate,
                        f"Required answers are missing: {preview}.")
         return
     emit("job", "Submitting completed application.", jobId=job_id, status="submitting")
-    if not _submit(page):
+    if not _submit(page, container):
         _manual_action(page, job, profile, resume_path, emit, stop, gate,
                        "A usable Submit button was not found.")
         return
     if _wait_for_confirmation(page):
-        emit("job", f"Submission confirmed for {job['company']} — {job['title']}",
-             jobId=job_id, status="submission_confirmed")
-        return
+         emit("job", f"Submission confirmed for {job['company']} — {job['title']}",
+              jobId=job_id, status="submission_confirmed")
+         return
     _manual_action(page, job, profile, resume_path, emit, stop, gate,
                    "Submit was clicked, but the ATS has not confirmed receipt.")
 
@@ -608,22 +632,87 @@ def _process(page: Page, job: dict[str, Any], profile: CandidateProfile, resume_
 def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path: Path, emit: Emit,
              stop: threading.Event, gate: ManualGate) -> None:
     with sync_playwright() as playwright:
-        browser: Browser = playwright.chromium.launch(headless=False, args=["--start-maximized", "--window-size=1600,900"])
-        # Use the actual Mac window size. A fixed viewport can extend below a
-        # smaller display and make CAPTCHA/Submit controls physically unreachable.
+        browser: Browser = playwright.chromium.launch(headless=False, slow_mo=300, args=["--start-maximized", "--window-size=1600,900"])
         context = browser.new_context(no_viewport=True)
+        
+        # Abort requests to my.greenhouse.io to prevent the candidate portal 401 error from crashing the page React state
+        context.route("**/my.greenhouse.io/**", lambda route: route.abort())
+        
         try:
-            for job in jobs:
+            # Process jobs in chunks of 10 (opening 10 tabs at once)
+            chunk_size = 10
+            for i in range(0, len(jobs), chunk_size):
                 if stop.is_set():
                     raise AutomationCancelled()
-                page = context.new_page()
-                try:
-                    _process(page, job, profile, resume_path, emit, stop, gate)
-                except Exception as exc:
-                    emit("error", f"{job['company']}: {exc}", jobId=job["id"], status="failed")
-                finally:
-                    page.wait_for_timeout(800)
-                    page.close()
+                
+                chunk = jobs[i:i+chunk_size]
+                pages: list[tuple[Page, dict[str, Any]]] = []
+                
+                # Step 1: Open all tabs in the current chunk and fill them
+                for job in chunk:
+                    if stop.is_set():
+                        raise AutomationCancelled()
+                    page = context.new_page()
+                    pages.append((page, job))
+                    
+                    job_id = job["id"]
+                    url = job["url"]
+                    ats_type = _detect_ats_type(url, job.get("ats"))
+                    ats_label = ats_type.capitalize() if ats_type else "Generic"
+                    container = _get_target_context(page, ats_type)
+                    
+                    emit("job", f"Opening {job['company']} — {job['title']} [{ats_label} strategy]",
+                         jobId=job_id, status="opening_browser")
+                    try:
+                        page.goto(url, wait_until="load", timeout=45000)
+                        _click_apply(page, container)
+                        try:
+                            page.wait_for_load_state("networkidle", timeout=5000)
+                        except Exception:
+                            pass
+                        if stop.is_set():
+                            raise AutomationCancelled()
+                        emit("job", f"Filling application using {ats_label} strategy.", jobId=job_id, status="filling")
+                        # Repeated passes cover fields revealed by earlier answers.
+                        for _ in range(4):
+                            if _fill_pass(page, profile, resume_path, emit, job_id, ats_type=ats_type) == 0:
+                                break
+                            page.wait_for_timeout(350)
+                    except AutomationCancelled:
+                        raise
+                    except Exception as exc:
+                        emit("error", f"{job['company']}: {exc}", jobId=job_id, status="failed")
+
+                # Step 2: Process validation and submission for each tab sequentially
+                for page, job in pages:
+                    if stop.is_set():
+                        raise AutomationCancelled()
+                    if page.is_closed():
+                        continue
+                    
+                    job_id = job["id"]
+                    try:
+                        page.bring_to_front()
+                        if _submission_confirmed(page):
+                            emit("job", f"Submission confirmed for {job['company']} — {job['title']}",
+                                 jobId=job_id, status="submission_confirmed")
+                        else:
+                            # Always pause to let the user review the filled application and potentially skip it
+                            _manual_action(page, job, profile, resume_path, emit, stop, gate,
+                                           "Review the application, then click Resume or Skip.")
+                        
+                        page.wait_for_timeout(800)
+                        page.close()
+                    except AutomationCancelled:
+                        raise
+                    except Exception as exc:
+                        emit("error", f"{job['company']}: {exc}", jobId=job_id, status="failed")
+                        try:
+                            page.close()
+                        except Exception:
+                            pass
+        except AutomationCancelled:
+            emit("status", "stopped", message="Batch stopped by the candidate.")
         finally:
             context.close()
             browser.close()

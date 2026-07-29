@@ -20,6 +20,7 @@ class CandidateProfile(BaseModel):
     postal_code: str = ""
     country: str = ""
     linkedin: str = ""
+    github: str = ""
     website: str = ""
     current_company: str = ""
     current_title: str = ""
@@ -45,6 +46,12 @@ def _split_name(name: str) -> tuple[str, str]:
 
 
 def _location(raw: Any) -> tuple[str, str, str, str, str]:
+    address = ""
+    city = ""
+    state = ""
+    postal = ""
+    country = ""
+
     if isinstance(raw, dict):
         address = _text(raw.get("address") or raw.get("address1"))
         city = _text(raw.get("city"))
@@ -52,13 +59,34 @@ def _location(raw: Any) -> tuple[str, str, str, str, str]:
         postal = _text(raw.get("postalCode") or raw.get("postal_code") or raw.get("zip"))
         country = _text(raw.get("countryCode") or raw.get("country"))
     else:
-        address, city, state, postal, country = _text(raw), "", "", "", ""
-    # Safely extract common "City, ST 12345" forms without inventing data.
-    match = re.fullmatch(r"\s*([^,]+),\s*([A-Za-z]{2})(?:\s+(\d{5}(?:-\d{4})?))?\s*", address)
-    if match:
-        city = city or match.group(1)
-        state = state or match.group(2)
-        postal = postal or (match.group(3) or "")
+        address = _text(raw)
+
+    # If city is still empty, let's try to extract it from address
+    if not city and address:
+        parts = [p.strip() for p in address.split(",") if p.strip()]
+        if len(parts) == 1:
+            city = parts[0]
+        elif len(parts) == 2:
+            city = parts[0]
+            state = state or parts[1]
+        elif len(parts) >= 3:
+            # If the first part has digits, it is likely a street address, so city is the second part
+            has_digits = any(c.isdigit() for c in parts[0])
+            if has_digits:
+                city = parts[1]
+                state = state or parts[2]
+            else:
+                city = parts[0]
+                state = state or parts[1]
+
+    # Clean up state (e.g. if it has zip code like "TX 77001")
+    if state:
+        state_parts = state.split()
+        if len(state_parts) > 1:
+            state = state_parts[0]
+            if not postal:
+                postal = "".join(state_parts[1:])
+
     return address, city, state, postal, country
 
 
@@ -73,9 +101,14 @@ def normalize_profile(raw: dict[str, Any], answers: dict[str, Any], fallback_ema
     address, city, state, postal, country = _location(basics.get("location") or basics.get("address"))
     profiles = basics.get("profiles") if isinstance(basics.get("profiles"), list) else []
     linkedin = _text(basics.get("linkedin") or basics.get("linkedinUrl"))
+    github = _text(basics.get("github") or basics.get("githubUrl"))
     for item in profiles:
-        if isinstance(item, dict) and "linkedin" in _text(item.get("network")).lower():
-            linkedin = linkedin or _text(item.get("url"))
+        if isinstance(item, dict):
+            net = _text(item.get("network")).lower()
+            if "linkedin" in net:
+                linkedin = linkedin or _text(item.get("url"))
+            elif "github" in net:
+                github = github or _text(item.get("url"))
     website = _text(basics.get("website") or basics.get("url") or basics.get("portfolio"))
     if "linkedin.com" in website and not linkedin:
         linkedin, website = website, ""
@@ -88,7 +121,7 @@ def normalize_profile(raw: dict[str, Any], answers: dict[str, Any], fallback_ema
         full_name=name or " ".join(filter(None, (first, last))), first_name=first, last_name=last,
         email=_text(basics.get("email")) or fallback_email, phone=_text(basics.get("phone")),
         address=address, city=city, state=state, postal_code=postal, country=country,
-        linkedin=linkedin, website=website,
+        linkedin=linkedin, github=github, website=website,
         current_company=_text(current.get("company") or current.get("name")),
         current_title=_text(current.get("position") or current.get("title")),
         authorized_to_work=answers.get("authorizedToWork"),

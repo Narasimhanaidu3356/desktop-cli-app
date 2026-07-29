@@ -33,6 +33,7 @@ def answer_for(label: str, profile: CandidateProfile) -> str | None:
         (("zip", "postal code"), profile.postal_code),
         (("country",), profile.country),
         (("linkedin",), profile.linkedin),
+        (("github",), profile.github),
         (("portfolio", "personal website", "website"), profile.website),
         (("current company", "employer"), profile.current_company),
         (("current title", "job title"), profile.current_title),
@@ -134,3 +135,59 @@ def best_option(answer: str, options: list[str]) -> str | None:
 
     ranked = sorted(((SequenceMatcher(None, wanted, value).ratio(), original) for original, value in cleaned), reverse=True)
     return ranked[0][1] if ranked and ranked[0][0] >= 0.70 else None
+
+
+def find_best_country_option(answer: str, options: list[str]) -> str | None:
+    """Find the best matching country option from a list of options.
+    
+    Handles cases like "+1 United States" matching "United States +1" by checking
+    both the dial code and country names.
+    """
+    wanted = normalize(answer)
+    
+    # Try exact match first
+    for opt in options:
+        if normalize(opt) == wanted:
+            return opt
+
+    # Extract digits (dial code) and words (country name) from wanted
+    wanted_digits = "".join(c for c in answer if c.isdigit())
+    wanted_words = re.sub(r"\+\d+|\b\d+\b", "", answer).strip()
+    w_words_norm = normalize(wanted_words)
+
+    aliases = {
+        "us": "united states",
+        "usa": "united states",
+        "uk": "united kingdom",
+        "ca": "canada",
+    }
+    w_words_norm = aliases.get(w_words_norm, w_words_norm)
+
+    scored_options = []
+    for opt in options:
+        opt_norm = normalize(opt)
+        opt_digits = "".join(c for c in opt if c.isdigit())
+        opt_words = re.sub(r"\+\d+|\b\d+\b", "", opt).strip()
+        o_words_norm = normalize(opt_words)
+        o_words_norm = aliases.get(o_words_norm, o_words_norm)
+        
+        score = 0
+        # If dial code matches exactly
+        if wanted_digits and opt_digits and wanted_digits == opt_digits:
+            score += 5
+            
+        # If country words match exactly
+        if w_words_norm and o_words_norm and w_words_norm == o_words_norm:
+            score += 10
+        # If one country word is a substring of the other
+        elif w_words_norm and o_words_norm and (w_words_norm in o_words_norm or o_words_norm in w_words_norm):
+            score += 5
+            
+        if score > 0:
+            scored_options.append((score, opt))
+            
+    if scored_options:
+        scored_options.sort(key=lambda x: x[0], reverse=True)
+        return scored_options[0][1]
+        
+    return None

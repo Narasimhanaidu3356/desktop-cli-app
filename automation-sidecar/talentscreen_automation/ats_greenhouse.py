@@ -24,10 +24,10 @@ import re
 from pathlib import Path
 from typing import Any
 
-from playwright.sync_api import Locator, Page
+from playwright.sync_api import FrameLocator, Locator, Page
 
 from .profile import CandidateProfile
-from .rules import answer_for, best_option, normalize, boolean_text
+from .rules import answer_for, best_option, normalize, boolean_text, find_best_country_option
 
 # ---------------------------------------------------------------------------
 # Greenhouse-specific CSS / attribute selectors
@@ -42,6 +42,7 @@ _GH_LINKEDIN   = ["job_application_urls_linkedin_linkedin_profile_url",
                    "linkedin_profile_url", "linkedin", "LinkedIn"]
 _GH_PORTFOLIO  = ["job_application_urls_0_", "website", "portfolio",
                    "online_portfolio"]
+_GH_GITHUB     = ["job_application_urls_github", "github_profile_url", "github", "GitHub"]
 _GH_RESUME     = ["resume", "resume_text"]  # file input ids
 
 # Country-code selectors for the phone field Greenhouse renders as a custom
@@ -198,11 +199,11 @@ def _gh_dispatch(control: Locator) -> None:
     )
 
 
-def _gh_fill_input(page: Page, field_id: str, value: str) -> bool:
+def _gh_fill_input(container: Page | FrameLocator, field_id: str, value: str) -> bool:
     """Fill a visible text input/textarea by id."""
     for selector in (f"#{field_id}", f'[name="{field_id}"]', f'[data-field="{field_id}"]'):
         try:
-            loc = page.locator(selector).first
+            loc = container.locator(selector).first
             if loc.count() and loc.is_visible() and loc.is_enabled():
                 existing = (loc.input_value() or "").strip()
                 if existing:
@@ -215,14 +216,14 @@ def _gh_fill_input(page: Page, field_id: str, value: str) -> bool:
     return False
 
 
-def _gh_try_ids(page: Page, ids: list[str], value: str) -> bool:
+def _gh_try_ids(container: Page | FrameLocator, ids: list[str], value: str) -> bool:
     for field_id in ids:
-        if _gh_fill_input(page, field_id, value):
+        if _gh_fill_input(container, field_id, value):
             return True
     return False
 
 
-def _gh_fill_phone_country(page: Page, profile: CandidateProfile) -> bool:
+def _gh_fill_phone_country(page: Page, container: Page | FrameLocator, profile: CandidateProfile) -> bool:
     """Set the phone number country-code flag picker on Greenhouse forms.
 
     Greenhouse uses the intl-tel-input library which renders a <button>
@@ -231,18 +232,35 @@ def _gh_fill_phone_country(page: Page, profile: CandidateProfile) -> bool:
     wanted = _resolve_phone_country(profile)
 
     # Detect the trigger button
-    trigger = page.locator(_PHONE_CC_SELECTOR).first
-    if not trigger.count():
+    trigger = container.locator(
+        ".iti__selected-flag, "
+        "button.iti__selected-flag, "
+        "button:has-text('Country'), "
+        "[role='combobox']:has-text('Country'), "
+        "[aria-haspopup='listbox']:has-text('Country'), "
+        ".phone-country-selector, "
+        "[data-qa='phone-country-code']"
+    ).first
+
+    if not trigger.count() or not trigger.is_visible():
+        phone_input = container.locator("input[type='tel'], input[name='phone'], input[id='phone'], input[name*='phone' i]").first
+        if phone_input.count() and phone_input.is_visible():
+            parent = phone_input.locator("xpath=..")
+            btn = parent.locator("button, [role='button'], [role='combobox']").first
+            if not btn.count() or not btn.is_visible():
+                parent = phone_input.locator("xpath=../..")
+                btn = parent.locator("button, [role='button'], [role='combobox']").first
+            if btn.count() and btn.is_visible():
+                trigger = btn
+
+    if not trigger.count() or not trigger.is_visible():
         return False
     try:
-        if not trigger.is_visible():
-            return False
-
         # Already correct? Check aria-label or title attribute.
         current_label = (
             trigger.get_attribute("aria-label") or
             trigger.get_attribute("title") or
-            trigger.inner_text()
+            trigger.inner_text() or ""
         ).strip()
         if normalize(wanted) in normalize(current_label):
             return False  # already set correctly
@@ -251,22 +269,27 @@ def _gh_fill_phone_country(page: Page, profile: CandidateProfile) -> bool:
         page.wait_for_timeout(300)
 
         # The dropdown list items use data-country-code or li[data-dial-code]
-        country_list = page.locator(
+        country_list = container.locator(
             'ul.iti__country-list li[data-country-code], '
             '.iti__country-list .iti__country, '
-            '[role="listbox"] [role="option"]'
+            '[role="listbox"] [role="option"], '
+            '.country-list li, '
+            'ul.country-list li, '
+            'ul[class*="country"] li, '
+            'li[id*="country"], '
+            'li[class*="country"]'
         )
         if not country_list.count():
             page.keyboard.press("Escape")
             return False
 
         all_texts = country_list.all_text_contents()
-        choice = best_option(wanted, all_texts)
+        choice = find_best_country_option(wanted, all_texts)
         if not choice:
             # Fallback: try matching just the dial code number
             dial_num = re.search(r"\+\d+", wanted)
             if dial_num:
-                choice = best_option(dial_num.group(), all_texts)
+                choice = find_best_country_option(dial_num.group(), all_texts)
         if not choice:
             page.keyboard.press("Escape")
             return False
@@ -286,9 +309,9 @@ def _gh_fill_phone_country(page: Page, profile: CandidateProfile) -> bool:
     return False
 
 
-def _gh_fill_select(page: Page, selector: str, answer: str) -> bool:
+def _gh_fill_select(container: Page | FrameLocator, selector: str, answer: str) -> bool:
     try:
-        loc = page.locator(selector).first
+        loc = container.locator(selector).first
         if not loc.count() or not loc.is_visible():
             return False
         options = loc.locator("option").all_text_contents()
@@ -302,11 +325,11 @@ def _gh_fill_select(page: Page, selector: str, answer: str) -> bool:
         return False
 
 
-def _gh_fill_custom_dropdown(page: Page, label_text: str, answer: str) -> bool:
+def _gh_fill_custom_dropdown(container: Page | FrameLocator, label_text: str, answer: str) -> bool:
     """Handle Greenhouse custom <select> wrappers that appear as styled divs."""
     try:
         # Greenhouse wraps selects with a label; find the select sibling.
-        label_loc = page.get_by_text(re.compile(re.escape(label_text), re.I)).first
+        label_loc = container.get_by_text(re.compile(re.escape(label_text), re.I)).first
         if not label_loc.count():
             return False
         parent = label_loc.locator("xpath=ancestor::div[@class and (contains(@class,'field') or contains(@class,'question'))][1]")
@@ -439,7 +462,7 @@ def _eeo_answer(label: str, profile: CandidateProfile) -> str | None:
 # Main Greenhouse fill entry-point
 # ---------------------------------------------------------------------------
 
-def fill_greenhouse(page: Page, profile: CandidateProfile, resume_path: Path) -> int:
+def fill_greenhouse(page: Page, container: Page | FrameLocator, profile: CandidateProfile, resume_path: Path) -> int:
     """Fill all detectable Greenhouse application fields.
 
     Returns the number of fields successfully filled so the caller can decide
@@ -449,95 +472,101 @@ def fill_greenhouse(page: Page, profile: CandidateProfile, resume_path: Path) ->
 
     # ── 1. Resume attachment ────────────────────────────────────────────────
     # Greenhouse renders a styled upload button; the actual <input type=file>
-    # may be hidden.  We try the widget trigger first, then the raw input.
+    # may be hidden. We try setting the files directly on the raw file input
+    # first to bypass the Greenhouse custom JS upload widget which can crash
+    # with "Cannot read properties of undefined (reading 'uploadFile')" when
+    # clicked programmatically.
     if resume_path and resume_path.is_file():
-        # Try the Greenhouse "Attach" button
-        attach_btn = page.locator(
-            'button:has-text("Attach"), button:has-text("Upload"), '
-            'button:has-text("Choose File"), a:has-text("Attach")'
-        ).first
-        if attach_btn.count() and attach_btn.is_visible():
+        file_inputs = container.locator('input[type="file"]')
+        for i in range(file_inputs.count()):
+            fi = file_inputs.nth(i)
             try:
-                # Check if resume already attached
-                already = page.locator(
-                    '.resume-filename, [data-qa="resume-display-name"], '
-                    '.resume-file-name, .attached-resume-name'
-                )
-                if not already.count() or not any(
-                    already.nth(i).is_visible() for i in range(already.count())
-                ):
-                    with page.expect_file_chooser(timeout=3000) as fc:
-                        attach_btn.click()
-                    fc.value.set_files(str(resume_path))
-                    page.wait_for_timeout(1000)
-                    changed += 1
-            except Exception:
-                pass
-
-        # Fallback to raw hidden file input
-        if changed == 0:
-            file_inputs = page.locator('input[type="file"]')
-            for i in range(file_inputs.count()):
-                fi = file_inputs.nth(i)
-                try:
-                    ident = " ".join(filter(None, [
-                        fi.get_attribute("id") or "",
-                        fi.get_attribute("name") or "",
-                        fi.get_attribute("aria-label") or "",
-                        fi.get_attribute("accept") or "",
-                    ])).lower()
-                    if "cover" in ident:
-                        continue
+                ident = " ".join(filter(None, [
+                    fi.get_attribute("id") or "",
+                    fi.get_attribute("name") or "",
+                    fi.get_attribute("aria-label") or "",
+                    fi.get_attribute("accept") or "",
+                ])).lower()
+                if "cover" in ident:
+                    continue
+                # If it's a resume input (usually id is "resume" or "resume_text")
+                if "resume" in ident or "cv" in ident or file_inputs.count() == 1:
                     already = fi.evaluate("el => Boolean(el.files && el.files.length)")
                     if not already:
                         fi.set_input_files(str(resume_path))
-                        page.wait_for_timeout(750)
+                        page.wait_for_timeout(1000)
                         changed += 1
                         break
+            except Exception:
+                continue
+
+        # Fallback to Greenhouse "Attach" button if direct upload didn't work
+        if changed == 0:
+            attach_btn = container.locator(
+                'button:has-text("Attach"), button:has-text("Upload"), '
+                'button:has-text("Choose File"), a:has-text("Attach")'
+            ).first
+            if attach_btn.count() and attach_btn.is_visible():
+                try:
+                    # Check if resume already attached
+                    already = container.locator(
+                        '.resume-filename, [data-qa="resume-display-name"], '
+                        '.resume-file-name, .attached-resume-name'
+                    )
+                    if not already.count() or not any(
+                        already.nth(i).is_visible() for i in range(already.count())
+                    ):
+                        with page.expect_file_chooser(timeout=3000) as fc:
+                            attach_btn.click()
+                        fc.value.set_files(str(resume_path))
+                        page.wait_for_timeout(1000)
+                        changed += 1
                 except Exception:
-                    continue
+                    pass
 
     # ── 2. Standard personal fields ─────────────────────────────────────────
     if profile.first_name:
-        changed += int(_gh_try_ids(page, _GH_FIRST_NAME, profile.first_name))
+        changed += int(_gh_try_ids(container, _GH_FIRST_NAME, profile.first_name))
     if profile.last_name:
-        changed += int(_gh_try_ids(page, _GH_LAST_NAME, profile.last_name))
+        changed += int(_gh_try_ids(container, _GH_LAST_NAME, profile.last_name))
     if profile.email:
-        changed += int(_gh_try_ids(page, _GH_EMAIL, profile.email))
+        changed += int(_gh_try_ids(container, _GH_EMAIL, profile.email))
 
     # ── 3. Phone + country code ─────────────────────────────────────────────
     if profile.phone:
         # Set the country code flag first (before filling the number)
-        changed += int(_gh_fill_phone_country(page, profile))
-        changed += int(_gh_try_ids(page, _GH_PHONE, profile.phone))
+        changed += int(_gh_fill_phone_country(page, container, profile))
+        changed += int(_gh_try_ids(container, _GH_PHONE, profile.phone))
 
     # ── 4. Location fields ──────────────────────────────────────────────────
     if profile.city:
-        changed += int(_gh_try_ids(page, ["city", "City"], profile.city))
+        changed += int(_gh_try_ids(container, ["city", "City"], profile.city))
     if profile.state:
-        changed += int(_gh_try_ids(page, ["state", "State", "province"], profile.state))
+        changed += int(_gh_try_ids(container, ["state", "State", "province"], profile.state))
     if profile.postal_code:
-        changed += int(_gh_try_ids(page, ["zip", "postal_code", "postcode"], profile.postal_code))
+        changed += int(_gh_try_ids(container, ["zip", "postal_code", "postcode"], profile.postal_code))
     if profile.country:
         # Some Greenhouse forms expose a country text input
-        changed += int(_gh_try_ids(page, ["country", "Country"], profile.country))
+        changed += int(_gh_try_ids(container, ["country", "Country"], profile.country))
 
     # ── 5. LinkedIn / Portfolio ─────────────────────────────────────────────
     if profile.linkedin:
-        changed += int(_gh_try_ids(page, _GH_LINKEDIN, profile.linkedin))
+        changed += int(_gh_try_ids(container, _GH_LINKEDIN, profile.linkedin))
     if profile.website:
-        changed += int(_gh_try_ids(page, _GH_PORTFOLIO, profile.website))
+        changed += int(_gh_try_ids(container, _GH_PORTFOLIO, profile.website))
+    if profile.github:
+        changed += int(_gh_try_ids(container, _GH_GITHUB, profile.github))
 
     # ── 6. Current employer / title ─────────────────────────────────────────
     if profile.current_company:
-        changed += int(_gh_try_ids(page, ["current_company", "current-company", "employer"], profile.current_company))
+        changed += int(_gh_try_ids(container, ["current_company", "current-company", "employer"], profile.current_company))
     if profile.current_title:
-        changed += int(_gh_try_ids(page, ["current_title", "current-title", "job_title", "title"], profile.current_title))
+        changed += int(_gh_try_ids(container, ["current_title", "current-title", "job_title", "title"], profile.current_title))
 
     # ── 7. Custom questions (Greenhouse's flexible question builder) ─────────
     # Greenhouse renders custom questions under [data-qa="custom-question"] or
     # inside .application-question / .field divs.
-    question_containers = page.locator(
+    question_containers = container.locator(
         '[data-qa="custom-question"], .application-question, .field--custom, '
         'li.custom-question, .custom-question'
     )
@@ -578,7 +607,7 @@ def fill_greenhouse(page: Page, profile: CandidateProfile, resume_path: Path) ->
                     # Try associated label text
                     rid = r.get_attribute("id")
                     if rid:
-                        assoc = page.locator(f'label[for="{rid}"]')
+                        assoc = container.locator(f'label[for="{rid}"]')
                         if assoc.count():
                             lbl = assoc.inner_text().strip() or lbl
                     all_radio_labels.append((r, lbl))
@@ -630,7 +659,7 @@ def fill_greenhouse(page: Page, profile: CandidateProfile, resume_path: Path) ->
             "el.getAttribute('placeholder') || el.getAttribute('name') || ''); "
             "}"
         )
-        for sel_loc in page.locator("select").all():
+        for sel_loc in container.locator("select").all():
             try:
                 if not sel_loc.is_visible():
                     continue

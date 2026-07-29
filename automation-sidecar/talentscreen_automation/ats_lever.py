@@ -26,10 +26,10 @@ import re
 from pathlib import Path
 from typing import Any
 
-from playwright.sync_api import Locator, Page
+from playwright.sync_api import FrameLocator, Locator, Page
 
 from .profile import CandidateProfile
-from .rules import answer_for, best_option, normalize, boolean_text
+from .rules import answer_for, best_option, normalize, boolean_text, find_best_country_option
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -79,7 +79,7 @@ _LEVER_PERSONAL_FIELDS: list[tuple[list[str], str]] = [
       "linkedInUrl", "LinkedIn"],               "linkedin"),
     (["urls[portfolio]", "website",
       "portfolio", "portfolioUrl"],             "website"),
-    (["urls[GitHub]", "github", "GitHub"],      "website"),  # fallback
+    (["urls[GitHub]", "github", "GitHub"],      "github"),
 ]
 
 # Phone country-code picker selectors (Lever uses iti or custom select)
@@ -106,7 +106,7 @@ def _lever_dispatch(control: Locator) -> None:
     )
 
 
-def _lever_fill_field(page: Page, field_names: list[str], value: str) -> bool:
+def _lever_fill_field(container: Page | FrameLocator, field_names: list[str], value: str) -> bool:
     """Try to fill a Lever text input / textarea using various attribute strategies."""
     if not value:
         return False
@@ -123,7 +123,7 @@ def _lever_fill_field(page: Page, field_names: list[str], value: str) -> bool:
         ]
     for sel in selectors:
         try:
-            loc = page.locator(sel).first
+            loc = container.locator(sel).first
             if not loc.count() or not loc.is_visible() or not loc.is_enabled():
                 continue
             existing = (loc.input_value() or "").strip()
@@ -137,16 +137,16 @@ def _lever_fill_field(page: Page, field_names: list[str], value: str) -> bool:
     return False
 
 
-def _lever_fill_phone_country_iti(page: Page, profile: CandidateProfile) -> bool:
+def _lever_fill_phone_country_iti(page: Page, container: Page | FrameLocator, profile: CandidateProfile) -> bool:
     """Handle the intl-tel-input (iti) phone country picker on Lever forms."""
     wanted = _resolve_phone_country(profile)
 
     # Native <select> style (some Lever versions)
-    native_sel = page.locator("select[name='phoneCountry'], select.phone-country").first
+    native_sel = container.locator("select[name='phoneCountry'], select.phone-country").first
     if native_sel.count() and native_sel.is_visible():
         try:
             options = native_sel.locator("option").all_text_contents()
-            choice = best_option(wanted, options)
+            choice = find_best_country_option(wanted, options)
             if choice:
                 native_sel.select_option(label=choice)
                 _lever_dispatch(native_sel)
@@ -154,15 +154,37 @@ def _lever_fill_phone_country_iti(page: Page, profile: CandidateProfile) -> bool
         except Exception:
             pass
 
-    # iti dropdown trigger (flag button)
-    trigger = page.locator(".iti__selected-flag, button.iti__selected-flag").first
+    # Find the trigger
+    trigger = container.locator(
+        ".iti__selected-flag, "
+        "button.iti__selected-flag, "
+        "button:has-text('Country'), "
+        "[role='combobox']:has-text('Country'), "
+        "[aria-haspopup='listbox']:has-text('Country'), "
+        ".phone-country-selector, "
+        "[data-qa='phone-country-code']"
+    ).first
+
+    if not trigger.count() or not trigger.is_visible():
+        phone_input = container.locator("input[type='tel'], input[name='phone'], input[id='phone'], input[name*='phone' i]").first
+        if phone_input.count() and phone_input.is_visible():
+            parent = phone_input.locator("xpath=..")
+            btn = parent.locator("button, [role='button'], [role='combobox']").first
+            if not btn.count() or not btn.is_visible():
+                parent = phone_input.locator("xpath=../..")
+                btn = parent.locator("button, [role='button'], [role='combobox']").first
+            if btn.count() and btn.is_visible():
+                trigger = btn
+
     if not trigger.count() or not trigger.is_visible():
         return False
+
     try:
         # Already correct?
         current = (
             trigger.get_attribute("aria-label") or
-            trigger.get_attribute("title") or ""
+            trigger.get_attribute("title") or
+            trigger.inner_text() or ""
         ).strip()
         if normalize(wanted) in normalize(current):
             return False
@@ -170,20 +192,26 @@ def _lever_fill_phone_country_iti(page: Page, profile: CandidateProfile) -> bool
         trigger.click()
         page.wait_for_timeout(300)
 
-        country_items = page.locator(
+        country_items = container.locator(
             "ul.iti__country-list .iti__country, "
-            ".iti__country-list li[data-country-code]"
+            ".iti__country-list li[data-country-code], "
+            "[role='listbox'] [role='option'], "
+            ".country-list li, "
+            "ul.country-list li, "
+            "ul[class*='country'] li, "
+            "li[id*='country'], "
+            "li[class*='country']"
         )
         if not country_items.count():
             page.keyboard.press("Escape")
             return False
 
         texts = country_items.all_text_contents()
-        choice = best_option(wanted, texts)
+        choice = find_best_country_option(wanted, texts)
         if not choice:
             dial_match = re.search(r"\+\d+", wanted)
             if dial_match:
-                choice = best_option(dial_match.group(), texts)
+                choice = find_best_country_option(dial_match.group(), texts)
         if not choice:
             page.keyboard.press("Escape")
             return False
@@ -207,7 +235,7 @@ def _lever_fill_phone_country_iti(page: Page, profile: CandidateProfile) -> bool
 # Resume attachment
 # ---------------------------------------------------------------------------
 
-def _lever_attach_resume(page: Page, resume_path: Path) -> bool:
+def _lever_attach_resume(page: Page, container: Page | FrameLocator, resume_path: Path) -> bool:
     """Attach the resume to the Lever application form.
 
     Lever renders a drag-and-drop area or a file input labelled
@@ -217,7 +245,7 @@ def _lever_attach_resume(page: Page, resume_path: Path) -> bool:
         return False
 
     # Check if already attached
-    already = page.locator(
+    already = container.locator(
         '.resume-name, .file-name, [data-test="resume-filename"], '
         '.resume-filename, .attached-filename, .lever-resume-name'
     )
@@ -227,7 +255,7 @@ def _lever_attach_resume(page: Page, resume_path: Path) -> bool:
         return False
 
     # Try visible upload/attach trigger button
-    triggers = page.locator(
+    triggers = container.locator(
         'button:has-text("Upload"), button:has-text("Attach"), '
         'button:has-text("Choose File"), button:has-text("Browse"), '
         'label:has-text("Upload"), label:has-text("Attach"), '
@@ -250,7 +278,7 @@ def _lever_attach_resume(page: Page, resume_path: Path) -> bool:
             continue
 
     # Fallback: hidden file input with resume/cv in its identity
-    file_inputs = page.locator('input[type="file"]')
+    file_inputs = container.locator('input[type="file"]')
     for i in range(file_inputs.count()):
         fi = file_inputs.nth(i)
         try:
@@ -340,6 +368,7 @@ def _lever_eeo_answer(label: str, profile: CandidateProfile) -> str | None:
 
 def _lever_fill_question(
     page: Page,
+    root: Page | FrameLocator,
     container: Locator,
     profile: CandidateProfile,
 ) -> bool:
@@ -383,7 +412,7 @@ def _lever_fill_question(
                 r = radios.nth(ri)
                 rid = r.get_attribute("id")
                 if rid:
-                    assoc = page.locator(f'label[for="{rid}"]')
+                    assoc = root.locator(f'label[for="{rid}"]')
                     lbl_txt = assoc.inner_text().strip() if assoc.count() else ""
                 else:
                     lbl_txt = ""
@@ -426,7 +455,7 @@ def _lever_fill_question(
 # Main Lever fill entry-point
 # ---------------------------------------------------------------------------
 
-def fill_lever(page: Page, profile: CandidateProfile, resume_path: Path) -> int:
+def fill_lever(page: Page, container: Page | FrameLocator, profile: CandidateProfile, resume_path: Path) -> int:
     """Fill all detectable Lever application fields.
 
     Returns the number of fields/sections successfully filled so the caller
@@ -435,7 +464,7 @@ def fill_lever(page: Page, profile: CandidateProfile, resume_path: Path) -> int:
     changed = 0
 
     # ── 1. Resume ────────────────────────────────────────────────────────────
-    if _lever_attach_resume(page, resume_path):
+    if _lever_attach_resume(page, container, resume_path):
         changed += 1
 
     # ── 2. Personal information fields ───────────────────────────────────────
@@ -447,57 +476,58 @@ def fill_lever(page: Page, profile: CandidateProfile, resume_path: Path) -> int:
         "current_title":   profile.current_title,
         "city":            profile.city,
         "linkedin":        profile.linkedin,
+        "github":          profile.github,
         "website":         profile.website,
     }
     for field_names, profile_attr in _LEVER_PERSONAL_FIELDS:
         value = profile_values.get(profile_attr, "")
         if value:
-            if _lever_fill_field(page, field_names, value):
+            if _lever_fill_field(container, field_names, value):
                 changed += 1
 
     # ── 3. Phone country code ────────────────────────────────────────────────
     if profile.phone:
-        if _lever_fill_phone_country_iti(page, profile):
+        if _lever_fill_phone_country_iti(page, container, profile):
             changed += 1
 
     # ── 4. Work authorization radio (Lever renders these as radio groups) ────
     if profile.authorized_to_work is not None:
-        auth_containers = page.locator(
+        auth_containers = container.locator(
             '[data-qa*="authorization"], [data-field*="authorized"], '
             '.application-question:has-text("authorized"), '
             '.application-question:has-text("work authorization")'
         )
         for i in range(auth_containers.count()):
-            if _lever_fill_question(page, auth_containers.nth(i), profile):
+            if _lever_fill_question(page, container, auth_containers.nth(i), profile):
                 changed += 1
 
     # ── 5. Sponsorship radio ──────────────────────────────────────────────────
     if profile.requires_sponsorship is not None:
-        spon_containers = page.locator(
+        spon_containers = container.locator(
             '[data-qa*="sponsorship"], [data-field*="sponsor"], '
             '.application-question:has-text("sponsorship"), '
             '.application-question:has-text("visa")'
         )
         for i in range(spon_containers.count()):
-            if _lever_fill_question(page, spon_containers.nth(i), profile):
+            if _lever_fill_question(page, container, spon_containers.nth(i), profile):
                 changed += 1
 
     # ── 6. Generic custom / additional questions ─────────────────────────────
     # Lever places custom questions inside .application-question or
     # [data-qa="additional-cards"] sub-sections.
-    question_wrappers = page.locator(
+    question_wrappers = container.locator(
         '.application-question, [data-qa="additional-cards"] .question, '
         '.lever-question, .custom-question-wrapper, '
         'ul.application-additional li, .application-additional-item'
     )
     for i in range(question_wrappers.count()):
         qw = question_wrappers.nth(i)
-        if _lever_fill_question(page, qw, profile):
+        if _lever_fill_question(page, container, qw, profile):
             changed += 1
 
     # ── 7. EEO / Diversity section ───────────────────────────────────────────
     # Lever's EEO section is often a separate card at the bottom of the form.
-    eeo_card = page.locator(
+    eeo_card = container.locator(
         '[data-qa="eeoc-section"], .eeoc-section, '
         '.diversity-section, #eeo, #eeoc'
     ).first
@@ -506,12 +536,12 @@ def fill_lever(page: Page, profile: CandidateProfile, resume_path: Path) -> int:
             '.application-question, .field, [data-qa="question"]'
         )
         for i in range(eeo_questions.count()):
-            if _lever_fill_question(page, eeo_questions.nth(i), profile):
+            if _lever_fill_question(page, container, eeo_questions.nth(i), profile):
                 changed += 1
 
     # ── 8. Salary / compensation ─────────────────────────────────────────────
     if profile.minimum_salary:
-        salary_inputs = page.locator(
+        salary_inputs = container.locator(
             'input[name*="salary" i], input[name*="compensation" i], '
             'input[id*="salary" i], input[placeholder*="salary" i]'
         )

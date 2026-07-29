@@ -22,6 +22,9 @@ interface JobDashboardProps {
   onApplyAll: () => void;
   onStop: () => void;
   onLogout: () => void;
+  currentView: "dashboard" | "history";
+  onViewChange: (view: "dashboard" | "history") => void;
+  history: any[];
 }
 
 export function JobDashboard({
@@ -41,6 +44,9 @@ export function JobDashboard({
   onApplyAll,
   onStop,
   onLogout,
+  currentView,
+  onViewChange,
+  history,
 }: JobDashboardProps) {
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
   const [atsFilter, setAtsFilter] = useState<"all" | AtsType>("all");
@@ -155,7 +161,7 @@ export function JobDashboard({
 
   return (
     <div className="app-shell">
-      <Sidebar />
+      <Sidebar currentView={currentView} onViewChange={onViewChange} />
 
       <main className="workspace">
         <header className="topbar">
@@ -167,8 +173,8 @@ export function JobDashboard({
             <button className="icon-button" onClick={onToggleDark} title="Toggle theme">
               {dark ? <Sun size={18} /> : <Moon size={18} />}
             </button>
-            <div 
-              className="profile-details-trigger" 
+            <div
+              className="profile-details-trigger"
               onClick={() => setShowDropdown(!showDropdown)}
               title="Profile details"
             >
@@ -197,144 +203,241 @@ export function JobDashboard({
             </div>
           )}
 
-          <section className="welcome-banner">
-            <div>
-              <span className="eyebrow">AUTOMATED JOB APPLICATIONS</span>
-              <h2>{jobs.length} supported jobs ready</h2>
-              <p>
-                One batch launches a private Chromium session and processes each supported ATS position without an extension or LLM.
-              </p>
-            </div>
-            <div className="batch-actions">
-              {running ? (
-                <button className="secondary-action" onClick={onStop}>
-                  <PauseCircle size={18} />
-                  Stop safely
-                </button>
-              ) : (
-                <button className="batch-button" onClick={onApplyAll} disabled={!displayedJobs.length}>
-                  <Play size={18} />
-                  Apply to all {displayedJobs.length}
-                </button>
-              )}
-            </div>
-          </section>
+          {currentView === "dashboard" ? (
+            <>
+              <section className="welcome-banner">
+                <div>
+                  <span className="eyebrow">AUTOMATED JOB APPLICATIONS</span>
+                  <h2>{jobs.length} supported jobs ready</h2>
+                  <p>
+                    One batch launches a private Chromium session and processes each supported ATS position without an extension or LLM.
+                  </p>
+                </div>
+                <div className="batch-actions">
+                  {running ? (
+                    <button className="secondary-action" onClick={onStop}>
+                      <PauseCircle size={18} />
+                      Stop safely
+                    </button>
+                  ) : (
+                    <button className="batch-button" onClick={onApplyAll} disabled={!displayedJobs.length}>
+                      <Play size={18} />
+                      Apply to all {displayedJobs.length}
+                    </button>
+                  )}
+                </div>
+              </section>
 
-          <section className="metrics">
-            <div>
-              <span className="metric-icon blue">
-                <Briefcase size={22} />
-              </span>
-              <p>
-                Supported jobs<strong>{jobs.length}</strong>
-              </p>
-            </div>
-            <div>
-              <span className="metric-icon green">
-                <CheckCheck size={22} />
-              </span>
-              <p>
-                Finished this run<strong>{submittedCount}</strong>
-              </p>
-            </div>
-            <div>
-              <span className="metric-icon purple">
-                <Wand2 size={22} />
-              </span>
-              <p>
-                Automation<strong>{running ? "Running" : "Ready"}</strong>
-              </p>
-            </div>
-          </section>
-
-          {events.length > 0 && (
-            <section className="automation-feed">
-              <h3>Live automation</h3>
-              {events.slice(-4).map((e, i) => (
-                <p key={`${e.timestamp}-${i}`}>
-                  <span>{e.type}</span>
-                  {e.message}
-                </p>
-              ))}
-            </section>
-          )}
-
-          <section className="jobs-section">
-            <div className="section-heading">
-              <div>
-                <h2>Application queue</h2>
-                <p>Filter positions by ATS provider, title, location, or application status.</p>
-              </div>
-
-              <div className="heading-controls">
-                {/* Filtration Controls */}
-                <div className="filter-group">
-                  <span className="filter-label">
-                    <SlidersHorizontal size={14} /> Filter:
+              <section className="metrics">
+                <div>
+                  <span className="metric-icon blue">
+                    <Briefcase size={22} />
                   </span>
-                  <select
-                    className="filter-select"
-                    value={atsFilter}
-                    onChange={(e) => setAtsFilter(e.target.value as "all" | AtsType)}
-                  >
-                    <option value="all">All Platforms</option>
-                    <option value="greenhouse">Greenhouse</option>
-                    <option value="lever">Lever</option>
-                    <option value="ashby">Ashby</option>
-                  </select>
+                  <p>
+                    Supported jobs<strong>{jobs.length}</strong>
+                  </p>
+                </div>
+                <div>
+                  <span className="metric-icon green">
+                    <CheckCheck size={22} />
+                  </span>
+                  <p>
+                    Finished this run<strong>{submittedCount}</strong>
+                  </p>
+                </div>
+                <div>
+                  <span className="metric-icon purple">
+                    <Wand2 size={22} />
+                  </span>
+                  <p>
+                    Automation<strong>{running ? "Running" : "Ready"}</strong>
+                  </p>
+                </div>
+              </section>
 
-                  <select
-                    className="filter-select"
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
-                  >
-                    <option value="all">All Statuses</option>
-                    <option value="ready">Ready</option>
-                    <option value="submitted">Submitted</option>
-                    <option value="failed">Failed</option>
-                  </select>
+              {events.length > 0 && (
+                <section className="automation-feed">
+                  <h3>Live automation</h3>
+                  {events.slice(-4).map((e, i) => (
+                    <p key={`${e.timestamp}-${i}`}>
+                      <span>{e.type}</span>
+                      {e.message}
+                    </p>
+                  ))}
+                </section>
+              )}
+
+              <section className="jobs-section">
+                <div className="section-heading">
+                  <div>
+                    <h2>Application queue</h2>
+                    <p>Filter positions by ATS provider, title, location, or application status.</p>
+                  </div>
+
+                  <div className="heading-controls">
+                    {/* Filtration Controls */}
+                    <div className="filter-group">
+                      <span className="filter-label">
+                        <SlidersHorizontal size={14} /> Filter:
+                      </span>
+                      <select
+                        className="filter-select"
+                        value={atsFilter}
+                        onChange={(e) => setAtsFilter(e.target.value as "all" | AtsType)}
+                      >
+                        <option value="all">All Platforms</option>
+                        <option value="greenhouse">Greenhouse</option>
+                        <option value="lever">Lever</option>
+                        <option value="ashby">Ashby</option>
+                      </select>
+
+                      <select
+                        className="filter-select"
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                      >
+                        <option value="all">All Statuses</option>
+                        <option value="ready">Ready</option>
+                        <option value="submitted">Submitted</option>
+                        <option value="failed">Failed</option>
+                      </select>
+                    </div>
+
+                    <div className="view-toggle">
+                      <button
+                        className={viewMode === "table" ? "active" : ""}
+                        onClick={() => setViewMode("table")}
+                        title="Table View"
+                      >
+                        <Table size={16} /> Table
+                      </button>
+                      <button
+                        className={viewMode === "grid" ? "active" : ""}
+                        onClick={() => setViewMode("grid")}
+                        title="Grid View"
+                      >
+                        <LayoutGrid size={16} /> Cards
+                      </button>
+                    </div>
+
+                    <div className="search">
+                      <Search size={16} />
+                      <input
+                        value={search}
+                        onChange={(e) => onSearchChange(e.target.value)}
+                        placeholder="Search jobs or companies"
+                      />
+                    </div>
+                  </div>
                 </div>
 
-                <div className="view-toggle">
-                  <button
-                    className={viewMode === "table" ? "active" : ""}
-                    onClick={() => setViewMode("table")}
-                    title="Table View"
-                  >
-                    <Table size={16} /> Table
-                  </button>
-                  <button
-                    className={viewMode === "grid" ? "active" : ""}
-                    onClick={() => setViewMode("grid")}
-                    title="Grid View"
-                  >
-                    <LayoutGrid size={16} /> Cards
-                  </button>
+                {viewMode === "table" ? (
+                  <JobTable jobs={paginatedJobs} jobStates={jobStates} />
+                ) : (
+                  <div className="job-grid">
+                    {paginatedJobs.map((job) => (
+                      <JobCard key={job.id} job={job} state={jobStates[job.id]} />
+                    ))}
+                  </div>
+                )}
+
+                {renderPagination()}
+              </section>
+            </>
+          ) : (
+            <>
+              <section className="welcome-banner history-banner" style={{ background: "linear-gradient(135deg, #1e1e30, #2b2b40)" }}>
+                <div>
+                  <span className="eyebrow" style={{ color: "#a855f7" }}>APPLICATION HISTORY LOG</span>
+
+                </div>
+              </section>
+
+              <section className="jobs-section">
+                <div className="section-heading">
+                  <div>
+                    <h2>Logged applications</h2>
+                    <p>Track all successfully submitted, skipped, or failed positions.</p>
+                  </div>
                 </div>
 
-                <div className="search">
-                  <Search size={16} />
-                  <input
-                    value={search}
-                    onChange={(e) => onSearchChange(e.target.value)}
-                    placeholder="Search jobs or companies"
-                  />
-                </div>
-              </div>
-            </div>
+                {!history.length ? (
+                  <div className="table-empty-state" style={{ padding: "80px 20px" }}>
+                    <p style={{ fontSize: "1.1rem", opacity: 0.7 }}>No application history found.</p>
+                    <p style={{ fontSize: "0.9rem", opacity: 0.5, marginTop: "8px" }}>
+                      Any jobs you apply to, skip, or fail will be saved here automatically.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="table-wrapper">
+                    <table className="job-data-table">
+                      <thead>
+                        <tr>
+                          <th>Company</th>
+                          <th>Role Title</th>
+                          <th>Platform</th>
+                          <th>Date Processed</th>
+                          <th>Status</th>
+                          <th>Link</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {history.map((item) => {
+                          const state = item.status || "submitted";
+                          const isSubmitted = state === "submitted";
+                          const isFailed = state === "failed" || state === "submission_unconfirmed" || state === "stopped";
+                          const isSkipped = state === "skipped";
 
-            {viewMode === "table" ? (
-              <JobTable jobs={paginatedJobs} jobStates={jobStates} />
-            ) : (
-              <div className="job-grid">
-                {paginatedJobs.map((job) => (
-                  <JobCard key={job.id} job={job} state={jobStates[job.id]} />
-                ))}
-              </div>
-            )}
+                          let statusClass = "status-ready";
+                          if (isSubmitted) statusClass = "status-submitted";
+                          if (isFailed) statusClass = "status-failed";
+                          if (isSkipped) statusClass = "status-skipped";
 
-            {renderPagination()}
-          </section>
+                          return (
+                            <tr key={item.id} className="job-table-row">
+                              <td className="company-col">
+                                <div className="company-cell">
+                                  <div className={`company-logo-sm ${item.job.ats}`}>
+                                    {item.job.company.slice(0, 1)}
+                                  </div>
+                                  <strong>{item.job.company}</strong>
+                                </div>
+                              </td>
+                              <td className="title-col">
+                                <span className="job-title-text">{item.job.title}</span>
+                              </td>
+                              <td className="ats-col">
+                                <span className={`ats-badge ${item.job.ats}`}>{item.job.ats}</span>
+                              </td>
+                              <td className="location-col">
+                                <span className="location-cell" style={{ opacity: 0.8 }}>
+                                  {new Date(item.createdAt).toLocaleString()}
+                                </span>
+                              </td>
+                              <td className="status-col">
+                                <span className={`status-pill ${statusClass}`}>{state}</span>
+                              </td>
+                              <td className="action-col">
+                                <a
+                                  href={item.job.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="table-link-icon"
+                                  title="View Job Source"
+                                >
+                                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                                </a>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            </>
+          )}
         </div>
       </main>
     </div>

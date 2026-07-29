@@ -50,3 +50,5 @@ automation-sidecar/browsers/*
 automation-sidecar/build/
 automation-sidecar/dist/
 *.spec
+build/
+build.log
