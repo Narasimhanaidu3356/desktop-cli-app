@@ -525,6 +525,8 @@ def _manual_action(page: Page, job: dict[str, Any], profile: CandidateProfile, r
     _scroll_to_manual_target(page, container)
     emit("job", reason + " Complete it in the browser, then click Resume automation.",
          jobId=job_id, status="manual_action_required")
+    import time
+    last_poll_time = 0.0
     try:
         while True:
             if stop.is_set():
@@ -537,9 +539,28 @@ def _manual_action(page: Page, job: dict[str, Any], profile: CandidateProfile, r
                 emit("job", f"Submission confirmed for {job['company']} — {job['title']}",
                      jobId=job_id, status="submission_confirmed")
                 return "submitted"
+
+            # Poll every ~1.0 second to check if the human finished filling the required fields
+            current_time = time.monotonic()
+            if current_time - last_poll_time >= 1.0:
+                last_poll_time = current_time
+                try:
+                    curr_url = page.url
+                    curr_ats = _detect_ats_type(curr_url, job.get("ats"))
+                    curr_container = _get_target_context(page, curr_ats)
+                    unresolved = _unresolved_required(curr_container)
+                    
+                    if not unresolved and not _captcha(curr_container):
+                        emit("job", "All required fields completed; submitting automatically.", jobId=job_id, status="submitting")
+                        if _submit(page, curr_container) and _wait_for_confirmation(page):
+                            continue
+                except Exception:
+                    pass
+
             if gate.skip.wait(0.4):
                 emit("job", f"Skipped {job['company']} — {job['title']}", jobId=job_id, status="skipped")
                 return "skipped"
+
             if gate.resume.is_set():
                 gate.resume.clear()
                 # Re-detect ATS type from the live page URL in case of redirect
@@ -552,16 +573,21 @@ def _manual_action(page: Page, job: dict[str, Any], profile: CandidateProfile, r
                     page.wait_for_timeout(250)
                 if _submission_confirmed(page):
                     continue
-                unresolved = _unresolved_required(container)
-                if unresolved or _captcha(container):
-                    detail = "; ".join(unresolved[:4]) if unresolved else "CAPTCHA is still present"
-                    emit("job", f"Manual action is still required: {detail}", jobId=job_id,
-                         status="manual_action_required")
-                    continue
-                emit("job", "Required fields are complete; submitting now.", jobId=job_id, status="submitting")
-                if not _submit(page, container) or not _wait_for_confirmation(page):
-                    emit("job", "Submission is not confirmed. Submit manually, then click Resume automation.",
-                         jobId=job_id, status="manual_action_required")
+
+                # Manual override: force submission attempt even if detectors see unresolved fields/CAPTCHA
+                emit("job", "Attempting to auto-submit completed form...", jobId=job_id, status="submitting")
+                submit_clicked = _submit(page, container)
+                confirmed = submit_clicked and _wait_for_confirmation(page)
+                
+                if not confirmed:
+                    unresolved = _unresolved_required(container)
+                    if unresolved or _captcha(container):
+                        detail = "; ".join(unresolved[:4]) if unresolved else "CAPTCHA is still present"
+                        emit("job", f"Manual action is still required: {detail}", jobId=job_id,
+                             status="manual_action_required")
+                    else:
+                        emit("job", "Submission is not confirmed. Submit manually, then click Resume automation.",
+                             jobId=job_id, status="manual_action_required")
                     continue
     finally:
         gate.finish()
