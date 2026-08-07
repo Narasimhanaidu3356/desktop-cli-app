@@ -451,6 +451,15 @@ def _lever_fill_question(
     return False
 
 
+def _parse_lever_date(date_str: str) -> str:
+    if not date_str:
+        return ""
+    match = re.search(r"(\d{4})", date_str)
+    if match:
+        return match.group(1)
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Main Lever fill entry-point
 # ---------------------------------------------------------------------------
@@ -483,6 +492,27 @@ def fill_lever(page: Page, container: Page | FrameLocator, profile: CandidatePro
         value = profile_values.get(profile_attr, "")
         if value:
             if _lever_fill_field(container, field_names, value):
+                changed += 1
+
+    # ── 2.5. Education fields ────────────────────────────────────────────────
+    if profile.education:
+        edu = profile.education[0]
+        if edu.school:
+            if _lever_fill_field(container, ["education[school]", "school"], edu.school):
+                changed += 1
+        if edu.major:
+            if _lever_fill_field(container, ["education[major]", "major", "discipline"], edu.major):
+                changed += 1
+        if edu.degree:
+            if _lever_fill_field(container, ["education[degree]", "degree"], edu.degree):
+                changed += 1
+        start_year = _parse_lever_date(edu.start_date)
+        if start_year:
+            if _lever_fill_field(container, ["education[startYear]", "education[start]", "startYear", "start-year"], start_year):
+                changed += 1
+        end_year = _parse_lever_date(edu.end_date)
+        if end_year:
+            if _lever_fill_field(container, ["education[endYear]", "education[end]", "endYear", "end-year"], end_year):
                 changed += 1
 
     # ── 3. Phone country code ────────────────────────────────────────────────

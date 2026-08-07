@@ -11,6 +11,13 @@ const ATS = {
       location: ["input[name*='location']", "input[autocomplete='address-level2']"],
       linkedinUrl: ["input[name*='linkedin' i]", "input[id*='linkedin' i]"],
       portfolioUrl: ["input[name*='website' i]", "input[name*='portfolio' i]"],
+      school: ["input[name*='school' i]", "input[id*='school' i]", "input[name*='education' i]"],
+      degree: ["select[name*='degree' i]", "input[name*='degree' i]", "#education_degree"],
+      major: ["input[name*='discipline' i]", "input[name*='major' i]", "input[id*='discipline' i]", "input[name*='education' i]"],
+      startMonth: ["select[name*='start_date_month' i]", "select[name*='start_month' i]", "select[id*='start_month' i]"],
+      startYear: ["select[name*='start_date_year' i]", "select[name*='start_year' i]", "select[id*='start_year' i]"],
+      endMonth: ["select[name*='end_date_month' i]", "select[name*='end_month' i]", "select[id*='end_month' i]"],
+      endYear: ["select[name*='end_date_year' i]", "select[name*='end_year' i]", "select[id*='end_year' i]"],
     },
     resume: ["#resume", "input[type='file'][name*='resume' i]", "input[type='file']"],
     submit: ["#submit_app_button", "button[type='submit']", "input[type='submit'][value*='Submit' i]"],
@@ -25,6 +32,11 @@ const ATS = {
       linkedinUrl: ["input[name='urls[LinkedIn]']", "input[name*='LinkedIn' i]"],
       portfolioUrl: ["input[name='urls[Portfolio]']", "input[name*='Portfolio' i]"],
       location: ["input[name*='location' i]"],
+      school: ["input[name='education[school]']", "input[name*='school' i]"],
+      major: ["input[name='education[major]']", "input[name*='major' i]", "input[name*='discipline' i]"],
+      degree: ["input[name='education[degree]']", "input[name*='degree' i]"],
+      startYear: ["input[name='education[startYear]']", "input[name*='start' i]"],
+      endYear: ["input[name='education[endYear]']", "input[name*='end' i]"],
     },
     resume: ["input[type='file'][name*='resume' i]", "input[type='file']"],
     submit: ["button.template-btn-submit", "button[type='submit']", "input[type='submit']"],
@@ -90,10 +102,68 @@ function fillKnownFields(ats, candidate) {
   const values = ats === "greenhouse"
     ? { firstName: candidate.firstName, lastName: candidate.lastName, email: candidate.email, phone: candidate.phone, location: candidate.location, linkedinUrl: candidate.linkedinUrl, portfolioUrl: candidate.portfolioUrl }
     : { fullName: candidate.fullName, email: candidate.email, phone: candidate.phone, currentCompany: candidate.currentCompany, location: candidate.location, linkedinUrl: candidate.linkedinUrl, portfolioUrl: candidate.portfolioUrl };
+
+  const monthNames = {
+    "1": "January", "2": "February", "3": "March", "4": "April",
+    "5": "May", "6": "June", "7": "July", "8": "August",
+    "9": "September", "10": "October", "11": "November", "12": "December"
+  };
+
+  const trySelectMonth = (element, monthNum) => {
+    const name = monthNames[monthNum];
+    if (name && chooseNative(element, name)) return true;
+    if (chooseNative(element, monthNum)) return true;
+    if (chooseNative(element, "0" + monthNum)) return true;
+    return false;
+  };
+
+  if (candidate.education && candidate.education.length > 0) {
+    const edu = candidate.education[0];
+    values.school = edu.school;
+    values.major = edu.major;
+    values.degree = edu.degree;
+    
+    const parseDate = (d) => {
+      if (!d) return { month: "", year: "" };
+      const m1 = d.match(/^(\d{4})[/-](\d{1,2})/);
+      if (m1) return { month: String(parseInt(m1[2])), year: m1[1] };
+      const m2 = d.match(/^(\d{1,2})[/-](\d{4})/);
+      if (m2) return { month: String(parseInt(m2[1])), year: m2[2] };
+      const m3 = d.match(/\b(\d{4})\b/);
+      if (m3) return { month: "", year: m3[1] };
+      return { month: "", year: "" };
+    };
+    
+    const start = parseDate(edu.startDate);
+    const end = parseDate(edu.endDate);
+    
+    if (ats === "greenhouse") {
+      values.startMonth = start.month;
+      values.startYear = start.year;
+      values.endMonth = end.month;
+      values.endYear = end.year;
+    } else {
+      values.startYear = start.year;
+      values.endYear = end.year;
+    }
+  }
+
   const filled = [];
   for (const [key, value] of Object.entries(values)) {
     const element = first(ATS[ats].fields[key]);
-    if (element && setNativeValue(element, value)) filled.push(key);
+    if (element) {
+      let ok = false;
+      if (element.tagName === "SELECT") {
+        if (key.endsWith("Month")) {
+          ok = trySelectMonth(element, value);
+        } else {
+          ok = chooseNative(element, value);
+        }
+      } else {
+        ok = setNativeValue(element, value);
+      }
+      if (ok) filled.push(key);
+    }
   }
   return filled;
 }
@@ -386,9 +456,39 @@ async function run(payload) {
     const resumeUploaded = uploadResume(ats, resumeFile);
     await sleep(800);
     await report(applicationId, "validating", { filledFields, semanticFields, questionResults, acceptedConsents, resumeUploaded });
-    if (hasCaptcha()) return report(applicationId, "captcha_detected", { message: "Automatic submission stopped" });
-    const missingFields = [...new Set([...requiredMissing(), ...questionResults.unresolved])];
-    if (missingFields.length) return report(applicationId, "unsupported_question", { missingFields });
+    
+    let missingFields = [...new Set([...requiredMissing(), ...questionResults.unresolved])];
+    let activeCaptcha = hasCaptcha();
+    
+    if (activeCaptcha || missingFields.length) {
+      let lastStatus = activeCaptcha ? "captcha_detected" : "unsupported_question";
+      await report(applicationId, lastStatus, { missingFields, message: "Awaiting human completion..." });
+      
+      while (true) {
+        await sleep(1000);
+        
+        // Check if submission already confirmed (e.g. user manually submitted)
+        const checkConfirm = await confirmationDetected(ats, location.href);
+        if (checkConfirm.confirmed) {
+          await report(applicationId, "submitted", checkConfirm);
+          return;
+        }
+        
+        missingFields = [...new Set([...requiredMissing(), ...questionResults.unresolved])];
+        activeCaptcha = hasCaptcha();
+        
+        const currentStatus = activeCaptcha ? "captcha_detected" : (missingFields.length ? "unsupported_question" : "filling_completed");
+        if (currentStatus !== lastStatus) {
+          lastStatus = currentStatus;
+          await report(applicationId, lastStatus, { missingFields });
+        }
+        
+        if (!activeCaptcha && !missingFields.length) {
+          break; // Exit polling loop and auto submit
+        }
+      }
+    }
+    
     const submit = first(ATS[ats].submit);
     if (!submit || submit.disabled || submit.getAttribute("aria-disabled") === "true") throw new Error("Enabled submit button was not found");
     await report(applicationId, "submitting");

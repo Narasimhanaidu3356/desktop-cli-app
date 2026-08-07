@@ -458,6 +458,114 @@ def _eeo_answer(label: str, profile: CandidateProfile) -> str | None:
     return None
 
 
+_GH_LABEL_SCRIPT = (
+    "el => { "
+    "const clean = s => (s || '').replace(/\\s+/g, ' ').trim(); "
+    "const labelled = (el.getAttribute('aria-labelledby') || '').split(/\\s+/)"
+    ".map(id => document.getElementById(id)?.innerText || '').join(' '); "
+    "const explicit = el.id ? document.querySelector(`label[for='${CSS.escape(el.id)}']`)?.innerText : ''; "
+    "const wrapping = el.closest('label')?.innerText || ''; "
+    "const group = el.closest('fieldset, [role=\'group\'], .field, .application-question'); "
+    "const groupLabel = group?.querySelector('legend, label, [class*=\'label\']')?.innerText || ''; "
+    "return clean(labelled || el.getAttribute('aria-label') || explicit || groupLabel || wrapping || "
+    "el.getAttribute('placeholder') || el.getAttribute('name') || ''); "
+    "}"
+)
+
+
+_MONTH_NAMES = {
+    "1": "January", "2": "February", "3": "March", "4": "April",
+    "5": "May", "6": "June", "7": "July", "8": "August",
+    "9": "September", "10": "October", "11": "November", "12": "December"
+}
+
+
+def _parse_gh_date(date_str: str) -> tuple[str, str]:
+    month = ""
+    year = ""
+    if not date_str:
+        return month, year
+    
+    # YYYY-MM-DD
+    m1 = re.search(r"^(\d{4})[/-](\d{1,2})", date_str)
+    if m1:
+        year = m1.group(1)
+        month = m1.group(2).lstrip("0")
+        return month, year
+        
+    # MM/YYYY
+    m2 = re.search(r"^(\d{1,2})[/-](\d{4})", date_str)
+    if m2:
+        month = m2.group(1).lstrip("0")
+        year = m2.group(2)
+        return month, year
+        
+    # YYYY-MM
+    m3 = re.search(r"^(\d{4})[/-](\d{1,2})", date_str)
+    if m3:
+        year = m3.group(1)
+        month = m3.group(2).lstrip("0")
+        return month, year
+        
+    # Only YYYY
+    m4 = re.search(r"\b(\d{4})\b", date_str)
+    if m4:
+        year = m4.group(1)
+        
+    return month, year
+
+
+def _select_month(container: Page | FrameLocator, selector: str, month_val: str) -> bool:
+    try:
+        loc = container.locator(selector).first
+        if not loc.count() or not loc.is_visible():
+            return False
+        options = loc.locator("option").all_text_contents()
+        
+        # Try month name
+        name = _MONTH_NAMES.get(month_val)
+        if name:
+            choice = best_option(name, options)
+            if choice:
+                loc.select_option(label=choice)
+                _gh_dispatch(loc)
+                return True
+        
+        # Try month number
+        choice = best_option(month_val, options)
+        if choice:
+            loc.select_option(label=choice)
+            _gh_dispatch(loc)
+            return True
+            
+        # Try month number with leading zero
+        if len(month_val) == 1:
+            choice = best_option(f"0{month_val}", options)
+            if choice:
+                loc.select_option(label=choice)
+                _gh_dispatch(loc)
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _select_year(container: Page | FrameLocator, selector: str, year_val: str) -> bool:
+    try:
+        loc = container.locator(selector).first
+        if not loc.count() or not loc.is_visible():
+            return False
+        options = loc.locator("option").all_text_contents()
+        choice = best_option(year_val, options)
+        if choice:
+            loc.select_option(label=choice)
+            _gh_dispatch(loc)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Main Greenhouse fill entry-point
 # ---------------------------------------------------------------------------
@@ -563,6 +671,45 @@ def fill_greenhouse(page: Page, container: Page | FrameLocator, profile: Candida
     if profile.current_title:
         changed += int(_gh_try_ids(container, ["current_title", "current-title", "job_title", "title"], profile.current_title))
 
+    # ── 6.5. Education fields ────────────────────────────────────────────────
+    if profile.education:
+        edu = profile.education[0]
+        if edu.school:
+            changed += int(_gh_try_ids(container, ["school", "education_school", "education[school]", "education_school_name", "education_institution"], edu.school))
+        if edu.degree:
+            degree_filled = False
+            for sel_loc in container.locator("select").all():
+                try:
+                    if sel_loc.is_visible():
+                        lbl = sel_loc.evaluate(_GH_LABEL_SCRIPT)
+                        if re.search(r"degree", lbl, re.I):
+                            options = sel_loc.locator("option").all_text_contents()
+                            choice = best_option(edu.degree, options)
+                            if choice:
+                                sel_loc.select_option(label=choice)
+                                _gh_dispatch(sel_loc)
+                                degree_filled = True
+                                changed += 1
+                                break
+                except Exception:
+                    continue
+            if not degree_filled:
+                changed += int(_gh_try_ids(container, ["degree", "education_degree", "education[degree]"], edu.degree))
+        if edu.major:
+            changed += int(_gh_try_ids(container, ["discipline", "major", "education_discipline", "education[discipline]", "education_major"], edu.major))
+        
+        start_month, start_year = _parse_gh_date(edu.start_date)
+        if start_month:
+            changed += int(_select_month(container, 'select[name*="start_date_month" i], select[name*="start_month" i], select[id*="start_month" i]', start_month))
+        if start_year:
+            changed += int(_select_year(container, 'select[name*="start_date_year" i], select[name*="start_year" i], select[id*="start_year" i]', start_year))
+            
+        end_month, end_year = _parse_gh_date(edu.end_date)
+        if end_month:
+            changed += int(_select_month(container, 'select[name*="end_date_month" i], select[name*="end_month" i], select[id*="end_month" i]', end_month))
+        if end_year:
+            changed += int(_select_year(container, 'select[name*="end_date_year" i], select[name*="end_year" i], select[id*="end_year" i]', end_year))
+
     # ── 7. Custom questions (Greenhouse's flexible question builder) ─────────
     # Greenhouse renders custom questions under [data-qa="custom-question"] or
     # inside .application-question / .field divs.
@@ -645,25 +792,11 @@ def fill_greenhouse(page: Page, container: Page | FrameLocator, profile: Candida
         nonlocal changed
         if not answer:
             return
-        # Inline label extraction to avoid circular import with browser.py
-        _LABEL_SCRIPT = (
-            "el => { "
-            "const clean = s => (s || '').replace(/\\s+/g, ' ').trim(); "
-            "const labelled = (el.getAttribute('aria-labelledby') || '').split(/\\s+/)"
-            ".map(id => document.getElementById(id)?.innerText || '').join(' '); "
-            "const explicit = el.id ? document.querySelector(`label[for='${CSS.escape(el.id)}']`)?.innerText : ''; "
-            "const wrapping = el.closest('label')?.innerText || ''; "
-            "const group = el.closest('fieldset, [role=\'group\'], .field, .application-question'); "
-            "const groupLabel = group?.querySelector('legend, label, [class*=\'label\']')?.innerText || ''; "
-            "return clean(labelled || el.getAttribute('aria-label') || explicit || groupLabel || wrapping || "
-            "el.getAttribute('placeholder') || el.getAttribute('name') || ''); "
-            "}"
-        )
         for sel_loc in container.locator("select").all():
             try:
                 if not sel_loc.is_visible():
                     continue
-                lbl = sel_loc.evaluate(_LABEL_SCRIPT)
+                lbl = sel_loc.evaluate(_GH_LABEL_SCRIPT)
                 if re.search(label_pattern, lbl, re.I):
                     options = sel_loc.locator("option").all_text_contents()
                     choice = best_option(answer, options)

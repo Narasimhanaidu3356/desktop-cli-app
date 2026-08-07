@@ -19,7 +19,7 @@ interface JobDashboardProps {
   error: string;
   onSearchChange: (query: string) => void;
   onToggleDark: () => void;
-  onApplyAll: () => void;
+  onApplyAll: (jobsToApply: Job[]) => void;
   onStop: () => void;
   onLogout: () => void;
   currentView: "dashboard" | "history";
@@ -220,7 +220,7 @@ export function JobDashboard({
                       Stop safely
                     </button>
                   ) : (
-                    <button className="batch-button" onClick={onApplyAll} disabled={!displayedJobs.length}>
+                    <button className="batch-button" onClick={() => onApplyAll(displayedJobs)} disabled={!displayedJobs.length}>
                       <Play size={18} />
                       Apply to all {displayedJobs.length}
                     </button>

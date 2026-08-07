@@ -1,4 +1,4 @@
-('D:\\jobsautomation - '
+('D:\\jobsautomation - Copy - '
  'Copy\\talentscreen-desktop\\build\\talentscreen-automation\\PYZ-00.pyz',
  [('IPython',
    'C:\\Users\\Admin\\AppData\\Roaming\\Python\\Python313\\site-packages\\IPython\\__init__.py',
@@ -6733,31 +6733,31 @@
   ('subprocess', 'C:\\Python313\\Lib\\subprocess.py', 'PYMODULE'),
   ('sysconfig', 'C:\\Python313\\Lib\\sysconfig\\__init__.py', 'PYMODULE'),
   ('talentscreen_automation',
-   'D:\\jobsautomation - '
+   'D:\\jobsautomation - Copy - '
    'Copy\\talentscreen-desktop\\automation-sidecar\\talentscreen_automation\\__init__.py',
    'PYMODULE'),
   ('talentscreen_automation.ats_greenhouse',
-   'D:\\jobsautomation - '
+   'D:\\jobsautomation - Copy - '
    'Copy\\talentscreen-desktop\\automation-sidecar\\talentscreen_automation\\ats_greenhouse.py',
    'PYMODULE'),
   ('talentscreen_automation.ats_lever',
-   'D:\\jobsautomation - '
+   'D:\\jobsautomation - Copy - '
    'Copy\\talentscreen-desktop\\automation-sidecar\\talentscreen_automation\\ats_lever.py',
    'PYMODULE'),
   ('talentscreen_automation.browser',
-   'D:\\jobsautomation - '
+   'D:\\jobsautomation - Copy - '
    'Copy\\talentscreen-desktop\\automation-sidecar\\talentscreen_automation\\browser.py',
    'PYMODULE'),
   ('talentscreen_automation.gender_detector',
-   'D:\\jobsautomation - '
+   'D:\\jobsautomation - Copy - '
    'Copy\\talentscreen-desktop\\automation-sidecar\\talentscreen_automation\\gender_detector.py',
    'PYMODULE'),
   ('talentscreen_automation.profile',
-   'D:\\jobsautomation - '
+   'D:\\jobsautomation - Copy - '
    'Copy\\talentscreen-desktop\\automation-sidecar\\talentscreen_automation\\profile.py',
    'PYMODULE'),
   ('talentscreen_automation.rules',
-   'D:\\jobsautomation - '
+   'D:\\jobsautomation - Copy - '
    'Copy\\talentscreen-desktop\\automation-sidecar\\talentscreen_automation\\rules.py',
    'PYMODULE'),
   ('tarfile', 'C:\\Python313\\Lib\\tarfile.py', 'PYMODULE'),

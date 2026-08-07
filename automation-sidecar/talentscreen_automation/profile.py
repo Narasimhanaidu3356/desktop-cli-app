@@ -8,6 +8,14 @@ from pydantic import BaseModel, Field
 from .gender_detector import detect_gender_from_name
 
 
+class EducationEntry(BaseModel):
+    school: str = ""
+    degree: str = ""
+    major: str = ""
+    start_date: str = ""
+    end_date: str = ""
+
+
 class CandidateProfile(BaseModel):
     full_name: str = ""
     first_name: str = ""
@@ -34,6 +42,7 @@ class CandidateProfile(BaseModel):
     disability_status: str = "No, I don't have a disability"
     predicted_gender: str | None = None  # "Male", "Female", or None (→ Decline)
     explicit_answers: dict[str, Any] = Field(default_factory=dict)
+    education: list[EducationEntry] = Field(default_factory=list)
 
 
 def _text(value: Any) -> str:
@@ -90,6 +99,31 @@ def _location(raw: Any) -> tuple[str, str, str, str, str]:
     return address, city, state, postal, country
 
 
+def _education(raw: dict[str, Any]) -> list[EducationEntry]:
+    raw_edu = raw.get("education") or raw.get("educations") or raw.get("educationList") or []
+    if not isinstance(raw_edu, list):
+        raw_edu = [raw_edu]
+    
+    entries = []
+    for item in raw_edu:
+        if not isinstance(item, dict):
+            continue
+        school = _text(item.get("institution") or item.get("school") or item.get("university") or item.get("name"))
+        degree = _text(item.get("studyType") or item.get("degree") or item.get("certificate"))
+        major = _text(item.get("area") or item.get("major") or item.get("discipline") or item.get("fieldOfStudy"))
+        start_date = _text(item.get("startDate") or item.get("start_date") or item.get("start"))
+        end_date = _text(item.get("endDate") or item.get("end_date") or item.get("end"))
+        if school or degree or major:
+            entries.append(EducationEntry(
+                school=school,
+                degree=degree,
+                major=major,
+                start_date=start_date,
+                end_date=end_date
+            ))
+    return entries
+
+
 def normalize_profile(raw: dict[str, Any], answers: dict[str, Any], fallback_email: str) -> CandidateProfile:
     basics = raw.get("basics") if isinstance(raw.get("basics"), dict) else raw.get("personal", raw)
     basics = basics if isinstance(basics, dict) else {}
@@ -133,4 +167,5 @@ def normalize_profile(raw: dict[str, Any], answers: dict[str, Any], fallback_ema
         disability_status="No, I don't have a disability",
         predicted_gender=detect_gender_from_name(first),
         explicit_answers=explicit if isinstance(explicit, dict) else {},
+        education=_education(raw),
     )

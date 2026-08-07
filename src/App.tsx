@@ -111,10 +111,10 @@ export default function App() {
 
   const pausedJobId = Object.keys(jobStates).find((id) => jobStates[id] === "manual_action_required");
 
-  async function applyAll() {
+  async function applyAll(jobsToApply: Job[]) {
     setError("");
     setShowResults(false);
-    const ids = filtered.map((j) => j.id);
+    const ids = jobsToApply.map((j) => j.id);
     setCurrentBatchIds(ids);
     setJobStates((old) => {
       const updated = { ...old };
@@ -128,7 +128,7 @@ export default function App() {
     try {
       // Sidecar is already running from the ResumeSetup step — no need to start again.
       // startBatch will fail with a clear error if it has crashed.
-      await automation.startBatch(filtered);
+      await automation.startBatch(jobsToApply);
       setRunning(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to start automation");

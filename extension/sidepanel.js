@@ -64,6 +64,13 @@ function normalizeResume(json) {
     disabilityStatus: pick(json, ["demographics.disabilityStatus", "demographics.disability_status", "disabilityStatus", "disability_status"]),
     applicationAnswers,
     consentToTerms: pick(json, ["consents.autoAccept", "consentToTerms"]),
+    education: Array.isArray(json.education) ? json.education.map(item => ({
+      school: pick(item, ["institution", "school", "university", "name"]),
+      degree: pick(item, ["studyType", "degree", "certificate"]),
+      major: pick(item, ["area", "major", "discipline", "fieldOfStudy"]),
+      startDate: pick(item, ["startDate", "start_date", "start"]),
+      endDate: pick(item, ["endDate", "end_date", "end"])
+    })) : []
   };
 }
 

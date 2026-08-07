@@ -657,12 +657,166 @@ def _process(page: Page, job: dict[str, Any], profile: CandidateProfile, resume_
 
 def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path: Path, emit: Emit,
              stop: threading.Event, gate: ManualGate) -> None:
+    import tempfile
+    import shutil
+    import base64
+    
+    import sys
+    start_path = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
+    extension_path = None
+    sub_paths = [
+        Path("project-talentscreen-autofill-extension"),
+        Path("_up_") / "_up_" / "project-talentscreen-autofill-extension",
+        Path("resources") / "_up_" / "_up_" / "project-talentscreen-autofill-extension",
+        Path("resources") / "project-talentscreen-autofill-extension"
+    ]
+    for parent in [start_path] + list(start_path.parents):
+        for sp in sub_paths:
+            candidate = parent / sp
+            if candidate.is_dir() and (candidate / "manifest.json").exists():
+                extension_path = candidate.resolve()
+                break
+        if extension_path:
+            break
+            
+    if not extension_path:
+        extension_path = start_path.parent.parent.parent.parent / "project-talentscreen-autofill-extension"
+    user_data_dir = tempfile.mkdtemp()
+    
+    args = [
+        "--start-maximized",
+        "--window-size=1600,900",
+        f"--disable-extensions-except={extension_path}",
+        f"--load-extension={extension_path}"
+    ]
+    
     with sync_playwright() as playwright:
-        browser: Browser = playwright.chromium.launch(headless=False, slow_mo=300, args=["--start-maximized", "--window-size=1600,900"])
-        context = browser.new_context(no_viewport=True)
+        context = playwright.chromium.launch_persistent_context(
+            user_data_dir,
+            headless=False,
+            slow_mo=300,
+            args=args,
+            no_viewport=True
+        )
         
-        # Abort requests to my.greenhouse.io to prevent the candidate portal 401 error from crashing the page React state
-        context.route("**/my.greenhouse.io/**", lambda route: route.abort())
+        # Fulfill requests to my.greenhouse.io with 401 instead of aborting to prevent ERR_FAILED from crashing page React state
+        context.route("**/my.greenhouse.io/**", lambda route: route.fulfill(status=401, content_type="application/json", body="{}"))
+        
+        # Wait for service worker to register and retrieve extension ID
+        extension_id = None
+        for _ in range(50):
+            if context.service_workers:
+                for worker in context.service_workers:
+                    if "background.js" in worker.url:
+                        extension_id = worker.url.split("/")[2]
+                        break
+            if extension_id:
+                break
+            context.page.wait_for_timeout(100)
+            
+        if extension_id:
+            emit("log", f"Detected custom extension ID: {extension_id}", jobId="", status="filling")
+        else:
+            workers = [w.url for w in context.service_workers] if context.service_workers else []
+            emit("log", f"Custom extension NOT detected! Extension path: {extension_path} (exists: {extension_path.exists()}). Registered workers: {workers}", jobId="", status="filling")
+            
+        if extension_id:
+            try:
+                with open(resume_path, "rb") as f:
+                    pdf_bytes = f.read()
+                pdf_base64 = base64.b64encode(pdf_bytes).decode("utf-8")
+                
+                resume_dict = {
+                    "data": f"data:application/pdf;base64,{pdf_base64}",
+                    "name": resume_path.name,
+                    "type": "application/pdf",
+                    "size": len(pdf_bytes)
+                }
+                
+                # Format profile as expected by extension
+                profile_dict = {
+                    "basics": {
+                        "name": profile.full_name,
+                        "email": profile.email,
+                        "phone": profile.phone,
+                        "location": {
+                            "address": profile.address,
+                            "city": profile.city,
+                            "region": profile.state,
+                            "postalCode": profile.postal_code,
+                            "country": profile.country or "United States"
+                        },
+                        "profiles": [
+                            {"network": "LinkedIn", "url": profile.linkedin},
+                            {"network": "GitHub", "url": profile.github}
+                        ]
+                    },
+                    "personal": {
+                        "firstName": profile.first_name,
+                        "lastName": profile.last_name,
+                        "email": profile.email,
+                        "phone": profile.phone,
+                        "city": profile.city,
+                        "state": profile.state,
+                        "country": profile.country,
+                        "address": profile.address,
+                        "zip_code": profile.postal_code
+                    },
+                    "professional": {
+                        "currentCompany": profile.current_company,
+                        "currentTitle": profile.current_title,
+                        "linkedinUrl": profile.linkedin,
+                        "portfolioUrl": profile.website
+                    },
+                    "work": [],
+                    "education": [
+                        {
+                            "institution": edu.school,
+                            "studyType": edu.degree,
+                            "area": edu.major,
+                            "startDate": edu.start_date,
+                            "endDate": edu.end_date
+                        }
+                        for edu in profile.education
+                    ],
+                    "eligibility": {
+                        "authorizedToWork": profile.authorized_to_work,
+                        "requiresSponsorship": profile.requires_sponsorship,
+                        "willingToRelocate": profile.willing_to_relocate,
+                        "backgroundCheckConsent": profile.background_check_consent,
+                        "citizenship": profile.citizenship,
+                        "securityClearance": profile.security_clearance
+                    },
+                    "preferences": {
+                        "minimumSalary": profile.minimum_salary
+                    },
+                    "demographics": {
+                        "gender": profile.predicted_gender or "Decline to answer",
+                        "disabilityStatus": profile.disability_status
+                    },
+                    "applicationAnswers": profile.explicit_answers
+                }
+                
+                # Open sidepanel to write data
+                setup_page = context.new_page()
+                setup_page.goto(f"chrome-extension://{extension_id}/src/ui/sidepanel.html")
+                setup_page.evaluate("""
+                    async ([profile, resume]) => {
+                        for (let i = 0; i < 50; i++) {
+                            if (window.ResumeManager) break;
+                            await new Promise(r => setTimeout(r, 100));
+                        }
+                        if (window.ResumeManager) {
+                            await window.ResumeManager.add(profile, resume, "Primary Resume");
+                        } else {
+                            throw new Error("window.ResumeManager not found on sidepanel");
+                        }
+                    }
+                """, [profile_dict, resume_dict])
+                setup_page.close()
+                emit("log", "Extension initialized with candidate resume and profile.", jobId="", status="filling")
+            except Exception as exc:
+                emit("log", f"Failed to initialize extension storage: {exc}", jobId="", status="filling")
         
         try:
             # Process jobs in chunks of 10 (opening 10 tabs at once)
@@ -699,6 +853,38 @@ def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path:
                         if stop.is_set():
                             raise AutomationCancelled()
                         emit("job", f"Filling application using {ats_label} strategy.", jobId=job_id, status="filling")
+                        
+                        # Trigger custom extension autofill for Greenhouse/Lever jobs
+                        if extension_id and ats_type in ("greenhouse", "lever"):
+                            try:
+                                page.bring_to_front()
+                                setup_page = context.new_page()
+                                setup_page.goto(f"chrome-extension://{extension_id}/src/ui/sidepanel.html")
+                                setup_page.evaluate("""
+                                    async (targetUrl) => {
+                                        const tabs = await chrome.tabs.query({ currentWindow: true });
+                                        const targetTab = tabs.find(t => t.url && t.url.split('?')[0] === targetUrl.split('?')[0]);
+                                        if (targetTab) {
+                                            const result = await chrome.storage.local.get(['resumeData', 'resumeFile']);
+                                            if (result.resumeData) {
+                                                const normalized = window.ResumeProcessor.normalize(result.resumeData);
+                                                chrome.tabs.sendMessage(targetTab.id, {
+                                                    action: "fill_form",
+                                                    data: result.resumeData,
+                                                    normalizedData: normalized,
+                                                    resumeFile: result.resumeFile,
+                                                    manual: true
+                                                });
+                                            }
+                                        }
+                                    }
+                                """, url)
+                                setup_page.close()
+                                page.bring_to_front()
+                                page.wait_for_timeout(1000)  # Wait for extension script to run
+                            except Exception as exc:
+                                emit("log", f"Failed to trigger extension autofill: {exc}", jobId=job_id, status="filling")
+
                         # Repeated passes cover fields revealed by earlier answers.
                         for _ in range(4):
                             if _fill_pass(page, profile, resume_path, emit, job_id, ats_type=ats_type) == 0:
@@ -740,5 +926,11 @@ def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path:
         except AutomationCancelled:
             emit("status", "stopped", message="Batch stopped by the candidate.")
         finally:
-            context.close()
-            browser.close()
+            try:
+                context.close()
+            except Exception:
+                pass
+            try:
+                shutil.rmtree(user_data_dir, ignore_errors=True)
+            except Exception:
+                pass

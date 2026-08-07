@@ -38,7 +38,8 @@
     ],
     "resources": [
       "../automation-sidecar/bin/talentscreen-automation.exe",
-      "../automation-sidecar/browsers/**/*"
+      "../automation-sidecar/browsers/**/*",
+      "../../project-talentscreen-autofill-extension/**/*"
     ],
     "macOS": {
       "minimumSystemVersion": "12.0",
