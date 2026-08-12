@@ -33,19 +33,12 @@ npm install
 pip install -r automation-sidecar/requirements-build.txt
 ```
 
-### 3. Install NLP Name Extraction & Gender Guesser Libraries
-```powershell
-pip install spacy gender-guesser
-python -m spacy download en_core_web_sm
-```
-
-### 4. Install Playwright Browser Files
-This installs the required Chromium browser binary in the default local cache directory:
+### 3. Install Playwright Chromium Browser
 ```powershell
 python -m playwright install chromium
 ```
 
-*(Optional)* If you want to install Chromium directly into the `automation-sidecar/browsers` folder for Tauri packaging:
+*(Optional)* If you want to bundle Chromium directly into the standalone installer package:
 ```powershell
 $env:PLAYWRIGHT_BROWSERS_PATH = "automation-sidecar\browsers"
 python -m playwright install chromium

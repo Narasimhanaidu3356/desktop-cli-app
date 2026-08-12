@@ -8,39 +8,40 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Dependencies
-node_modules
+node_modules/
 
 # Build output
-dist
-dist-ssr
+dist/
+dist-ssr/
 *.local
 
-# Rust / Tauri build artifacts (auto-generated, can be very large — 9GB+)
-src-tauri/target
+# Rust / Tauri build artifacts
+src-tauri/target/
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-node_modules/
-dist/
+
+# Environment variables
 .env
 .env.*
 !.env.example
 !.env.production.example
-src-tauri/target/
-*.log
+
+# Certificates & Signing
 *.p12
 *.cer
 *.p8
 *.mobileprovision
-.DS_Store
+
+# Python / PyInstaller build artifacts
 __pycache__/
 *.pyc
 automation-sidecar/bin/*
@@ -49,7 +50,5 @@ automation-sidecar/browsers/*
 !automation-sidecar/browsers/.gitkeep
 automation-sidecar/build/
 automation-sidecar/dist/
-*.spec
 build/
-build.log
-*.md
+build.log

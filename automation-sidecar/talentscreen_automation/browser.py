@@ -666,10 +666,14 @@ def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path:
     start_path = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
     extension_path = None
     sub_paths = [
+        Path("extension"),
+        Path("_up_") / "extension",
+        Path("resources") / "extension",
+        Path("resources") / "_up_" / "extension",
         Path("project-talentscreen-autofill-extension"),
         Path("_up_") / "_up_" / "project-talentscreen-autofill-extension",
         Path("resources") / "_up_" / "_up_" / "project-talentscreen-autofill-extension",
-        Path("resources") / "project-talentscreen-autofill-extension"
+        Path("resources") / "project-talentscreen-autofill-extension",
     ]
     for parent in [start_path] + list(start_path.parents):
         for sp in sub_paths:
@@ -679,16 +683,16 @@ def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path:
                 break
         if extension_path:
             break
-            
-    if not extension_path:
-        extension_path = start_path.parent.parent.parent.parent / "project-talentscreen-autofill-extension"
-    
+
     args = [
         "--start-maximized",
         "--window-size=1600,900",
-        f"--disable-extensions-except={extension_path}",
-        f"--load-extension={extension_path}"
     ]
+    if extension_path and extension_path.exists():
+        args.extend([
+            f"--disable-extensions-except={extension_path}",
+            f"--load-extension={extension_path}"
+        ])
     
     chrome_profile_path = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
     fallback_profile_path = os.path.expandvars(r"%LOCALAPPDATA%\TalentScreen\Chrome Profile")
@@ -770,6 +774,7 @@ def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path:
         context.route("**/my.greenhouse.io/**", lambda route: route.fulfill(status=401, content_type="application/json", body="{}"))
         
         # Wait for service worker to register and retrieve extension ID
+        import time
         extension_id = None
         for _ in range(50):
             if context.service_workers:
@@ -779,7 +784,7 @@ def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path:
                         break
             if extension_id:
                 break
-            context.page.wait_for_timeout(100)
+            time.sleep(0.1)
             
         if extension_id:
             emit("log", f"Detected custom extension ID: {extension_id}", jobId="", status="filling")
