@@ -52,3 +52,4 @@ automation-sidecar/dist/
 *.spec
 build/
 build.log
+*.md

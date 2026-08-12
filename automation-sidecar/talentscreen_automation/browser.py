@@ -660,6 +660,7 @@ def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path:
     import tempfile
     import shutil
     import base64
+    import os
     
     import sys
     start_path = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
@@ -681,7 +682,6 @@ def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path:
             
     if not extension_path:
         extension_path = start_path.parent.parent.parent.parent / "project-talentscreen-autofill-extension"
-    user_data_dir = tempfile.mkdtemp()
     
     args = [
         "--start-maximized",
@@ -690,14 +690,81 @@ def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path:
         f"--load-extension={extension_path}"
     ]
     
+    chrome_profile_path = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
+    fallback_profile_path = os.path.expandvars(r"%LOCALAPPDATA%\TalentScreen\Chrome Profile")
+    
+    user_data_dir = None
+    is_temp_dir = False
+    
     with sync_playwright() as playwright:
-        context = playwright.chromium.launch_persistent_context(
-            user_data_dir,
-            headless=False,
-            slow_mo=300,
-            args=args,
-            no_viewport=True
-        )
+        context = None
+        
+        # 1. Attempt to launch using real Google Chrome profile (if closed/not locked)
+        if os.path.isdir(chrome_profile_path):
+            try:
+                emit("log", "Attempting to launch using real Google Chrome profile...", jobId="", status="filling")
+                context = playwright.chromium.launch_persistent_context(
+                    chrome_profile_path,
+                    channel="chrome",
+                    headless=False,
+                    slow_mo=300,
+                    args=args + ["--profile-directory=Default"],
+                    no_viewport=True,
+                    ignore_default_args=["--enable-automation"]
+                )
+                user_data_dir = chrome_profile_path
+                emit("log", "Successfully loaded real Google Chrome profile.", jobId="", status="filling")
+            except Exception as e:
+                emit("log", f"Could not load real Google Chrome profile (it may be open or locked): {e}", jobId="", status="filling")
+        
+        # 2. Attempt to launch using persistent dedicated TalentScreen profile with Chrome channel
+        if not context:
+            try:
+                emit("log", f"Attempting to launch using persistent TalentScreen Chrome profile: {fallback_profile_path}", jobId="", status="filling")
+                os.makedirs(fallback_profile_path, exist_ok=True)
+                context = playwright.chromium.launch_persistent_context(
+                    fallback_profile_path,
+                    channel="chrome",
+                    headless=False,
+                    slow_mo=300,
+                    args=args,
+                    no_viewport=True,
+                    ignore_default_args=["--enable-automation"]
+                )
+                user_data_dir = fallback_profile_path
+                emit("log", "Successfully loaded persistent TalentScreen Chrome profile.", jobId="", status="filling")
+            except Exception as e:
+                emit("log", f"Could not load persistent TalentScreen profile with Google Chrome: {e}", jobId="", status="filling")
+                
+        # 3. Attempt to launch using persistent dedicated TalentScreen profile with default Playwright Chromium
+        if not context:
+            try:
+                emit("log", "Attempting to launch persistent TalentScreen profile using default Playwright Chromium...", jobId="", status="filling")
+                context = playwright.chromium.launch_persistent_context(
+                    fallback_profile_path,
+                    headless=False,
+                    slow_mo=300,
+                    args=args,
+                    no_viewport=True,
+                    ignore_default_args=["--enable-automation"]
+                )
+                user_data_dir = fallback_profile_path
+                emit("log", "Successfully loaded persistent TalentScreen profile with default Chromium.", jobId="", status="filling")
+            except Exception as e:
+                emit("log", f"Could not load persistent TalentScreen profile with default Chromium: {e}", jobId="", status="filling")
+                
+        # 4. Fallback to temporary profile
+        if not context:
+            emit("log", "Falling back to temporary clean profile...", jobId="", status="filling")
+            user_data_dir = tempfile.mkdtemp()
+            is_temp_dir = True
+            context = playwright.chromium.launch_persistent_context(
+                user_data_dir,
+                headless=False,
+                slow_mo=300,
+                args=args,
+                no_viewport=True
+            )
         
         # Fulfill requests to my.greenhouse.io with 401 instead of aborting to prevent ERR_FAILED from crashing page React state
         context.route("**/my.greenhouse.io/**", lambda route: route.fulfill(status=401, content_type="application/json", body="{}"))
@@ -930,7 +997,8 @@ def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path:
                 context.close()
             except Exception:
                 pass
-            try:
-                shutil.rmtree(user_data_dir, ignore_errors=True)
-            except Exception:
-                pass
+            if is_temp_dir and user_data_dir:
+                try:
+                    shutil.rmtree(user_data_dir, ignore_errors=True)
+                except Exception:
+                    pass
