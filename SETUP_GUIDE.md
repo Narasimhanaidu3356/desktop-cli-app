@@ -19,30 +19,65 @@ Before setting up the project, make sure the following dependencies are installe
 
 ---
 
-## 📦 Phase 2: Installing Dependencies
+## 📦 Phase 2: Installing Dependencies & Environment Setup
 
-Open a terminal (e.g., PowerShell on Windows) in the root of the cloned project folder (`talentscreen-desktop`) and run the following commands:
+Open a terminal in the root of the cloned project folder and run the following commands:
 
 ### 1. Install Node.js Frontend & Tauri Packages
 ```powershell
 npm install
 ```
 
-### 2. Install Python Dependencies & PyInstaller
+### 2. Set Up Python Virtual Environment & Install Dependencies
+Setting up a virtual environment ensures clean dependency isolation:
+
+**On Windows (PowerShell):**
 ```powershell
-pip install -r automation-sidecar/requirements-build.txt
+# Create virtual environment
+python -m venv .venv
+
+# Install Python packages
+.venv\Scripts\pip install -r automation-sidecar/requirements-build.txt
+```
+
+**On macOS / Linux:**
+```bash
+# Create virtual environment
+python3 -m venv .venv
+
+# Install Python packages
+.venv/bin/pip install -r automation-sidecar/requirements-build.txt
 ```
 
 ### 3. Install Playwright Chromium Browser
-```powershell
-python -m playwright install chromium
-```
+You **must** download and install the browser inside the `automation-sidecar/browsers` folder so it can be correctly bundled by Tauri:
 
-*(Optional)* If you want to bundle Chromium directly into the standalone installer package:
+**On Windows (PowerShell):**
 ```powershell
 $env:PLAYWRIGHT_BROWSERS_PATH = "automation-sidecar\browsers"
-python -m playwright install chromium
+.venv\Scripts\python -m playwright install chromium
 ```
+
+**On macOS / Linux:**
+```bash
+export PLAYWRIGHT_BROWSERS_PATH="automation-sidecar/browsers"
+.venv/bin/python -m playwright install chromium
+```
+
+### 4. Create and Configure `.env` File
+By default, the application runs in Demo/Mock Mode. To run the real application and login with your Whitebox Learning account, you must create a `.env` file and set mock data to false:
+
+1. Copy `.env.example` to `.env`:
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+2. Open `.env` and configure the following variables:
+   ```env
+   VITE_WBL_API_URL=https://api.whitebox-learning.com/api
+   VITE_USE_MOCK_DATA=false
+   VITE_USE_APPLICATION_API=true
+   ```
+
 
 ---
 

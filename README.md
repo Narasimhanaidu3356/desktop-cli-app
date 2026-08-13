@@ -41,29 +41,41 @@ Ensure the following tools are installed on your system:
 
 ### 2. Environment Setup
 
-Run the following commands to install dependencies and download browser packages:
+Run the following commands to install dependencies, set up environment variables, and download browser packages:
 
 #### Install Frontend & Tauri packages:
 ```powershell
 npm install
 ```
 
-#### Install Python dependencies & PyInstaller build requirements:
+#### Set Up Python Virtual Environment & Install Dependencies:
 ```powershell
-pip install -r automation-sidecar/requirements-build.txt
-```
+# Create virtual environment
+python -m venv .venv
 
-#### Install NLP name extraction & gender classification libraries:
-```powershell
-pip install spacy gender-guesser
-python -m spacy download en_core_web_sm
+# Install Python packages
+.venv\Scripts\pip install -r automation-sidecar/requirements-build.txt
 ```
 
 #### Install Playwright browser binaries:
+You **must** download and install the browser inside the `automation-sidecar/browsers` folder so it can be correctly bundled by Tauri:
 ```powershell
-# Installs Chromium browser in local cache/app directory
-python -m playwright install chromium
+$env:PLAYWRIGHT_BROWSERS_PATH = "automation-sidecar\browsers"
+.venv\Scripts\python -m playwright install chromium
 ```
+
+#### Create and Configure `.env` File:
+By default, the application runs in Demo/Mock Mode. To run the real application and login with your Whitebox Learning account, copy `.env.example` to `.env` and set mock data to false:
+```powershell
+Copy-Item .env.example .env
+```
+Configure your `.env` file:
+```env
+VITE_WBL_API_URL=https://api.whitebox-learning.com/api
+VITE_USE_MOCK_DATA=false
+VITE_USE_APPLICATION_API=true
+```
+
 
 ---
 

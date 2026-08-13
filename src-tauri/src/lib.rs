@@ -60,34 +60,22 @@ fn find_sidecar_launch_target(app: &tauri::AppHandle) -> Result<(Command, Option
 
     let mut checked_locations: Vec<String> = Vec::new();
     let mut found_binary: Option<PathBuf> = None;
+    let mut found_script: Option<PathBuf> = None;
 
-    for base in &base_dirs {
-        for sub in &sub_binary_paths {
-            let candidate = base.join(sub);
-            if candidate.is_file() {
-                found_binary = Some(candidate);
-                break;
-            } else {
-                checked_locations.push(candidate.display().to_string());
-            }
-        }
-        if found_binary.is_some() {
-            break;
-        }
-    }
+    let sub_script_paths = [
+        Path::new("_up_").join("automation-sidecar").join("main.py"),
+        Path::new("..").join("automation-sidecar").join("main.py"),
+        Path::new("automation-sidecar").join("main.py"),
+        Path::new("resources").join("_up_").join("automation-sidecar").join("main.py"),
+        Path::new("resources").join("automation-sidecar").join("main.py"),
+        Path::new("resources").join("main.py"),
+        PathBuf::from("main.py"),
+    ];
 
-    let (command, executable_path) = if let Some(bin_path) = found_binary {
-        (Command::new(&bin_path), bin_path)
-    } else {
-        let sub_script_paths = [
-            Path::new("_up_").join("automation-sidecar").join("main.py"),
-            Path::new("automation-sidecar").join("main.py"),
-            Path::new("resources").join("_up_").join("automation-sidecar").join("main.py"),
-            Path::new("resources").join("automation-sidecar").join("main.py"),
-            Path::new("resources").join("main.py"),
-            PathBuf::from("main.py"),
-        ];
-        let mut found_script: Option<PathBuf> = None;
+    let is_debug = cfg!(debug_assertions);
+
+    // In debug mode, look for the Python script first
+    if is_debug {
         for base in &base_dirs {
             for sub in &sub_script_paths {
                 let candidate = base.join(sub);
@@ -102,8 +90,71 @@ fn find_sidecar_launch_target(app: &tauri::AppHandle) -> Result<(Command, Option
                 break;
             }
         }
+    }
 
-        if let Some(script_path) = found_script {
+    // If script not found (or in release mode), look for the binary
+    if found_script.is_none() {
+        for base in &base_dirs {
+            for sub in &sub_binary_paths {
+                let candidate = base.join(sub);
+                if candidate.is_file() {
+                    found_binary = Some(candidate);
+                    break;
+                } else {
+                    checked_locations.push(candidate.display().to_string());
+                }
+            }
+            if found_binary.is_some() {
+                break;
+            }
+        }
+    }
+
+    // If script and binary not found, and we are in release mode, fall back to looking for the script
+    if found_script.is_none() && found_binary.is_none() && !is_debug {
+        for base in &base_dirs {
+            for sub in &sub_script_paths {
+                let candidate = base.join(sub);
+                if candidate.is_file() {
+                    found_script = Some(candidate);
+                    break;
+                } else {
+                    checked_locations.push(candidate.display().to_string());
+                }
+            }
+            if found_script.is_some() {
+                break;
+            }
+        }
+    }
+
+    let (command, executable_path) = if let Some(bin_path) = found_binary {
+        (Command::new(&bin_path), bin_path)
+    } else if let Some(script_path) = found_script {
+        let mut venv_python: Option<PathBuf> = None;
+        for base in &base_dirs {
+            let candidate = if cfg!(target_os = "windows") {
+                if base.join(".venv").join("Scripts").join("python.exe").is_file() {
+                    base.join(".venv").join("Scripts").join("python.exe")
+                } else {
+                    base.join("..").join(".venv").join("Scripts").join("python.exe")
+                }
+            } else {
+                if base.join(".venv").join("bin").join("python").is_file() {
+                    base.join(".venv").join("bin").join("python")
+                } else {
+                    base.join("..").join(".venv").join("bin").join("python")
+                }
+            };
+            if candidate.is_file() {
+                venv_python = Some(candidate);
+                break;
+            }
+        }
+
+        let mut py_cmd = if let Some(vp) = venv_python {
+            Command::new(vp)
+        } else {
             let py_exe = if cfg!(target_os = "windows") {
                 if Command::new("python").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok() {
                     "python"
@@ -121,17 +172,17 @@ fn find_sidecar_launch_target(app: &tauri::AppHandle) -> Result<(Command, Option
                     "python3"
                 }
             };
+            Command::new(py_exe)
+        };
 
-            let mut py_cmd = Command::new(py_exe);
-            py_cmd.arg(&script_path);
-            (py_cmd, script_path)
-        } else {
-            let formatted_list = checked_locations.join("\n- ");
-            let primary_binary = binary_names[0];
-            return Err(format!(
-                "packaged automation engine executable ({primary_binary}) or script (main.py) was not found.\nChecked locations:\n- {formatted_list}"
-            ));
-        }
+        py_cmd.arg(&script_path);
+        (py_cmd, script_path)
+    } else {
+        let formatted_list = checked_locations.join("\n- ");
+        let primary_binary = binary_names[0];
+        return Err(format!(
+            "packaged automation engine executable ({primary_binary}) or script (main.py) was not found.\nChecked locations:\n- {formatted_list}"
+        ));
     };
 
     let sub_browser_paths = [

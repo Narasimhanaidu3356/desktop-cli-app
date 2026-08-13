@@ -702,9 +702,10 @@ def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path:
     
     with sync_playwright() as playwright:
         context = None
+        is_frozen = getattr(sys, "frozen", False)
         
-        # 1. Attempt to launch using real Google Chrome profile (if closed/not locked)
-        if os.path.isdir(chrome_profile_path):
+        # 1. Attempt to launch using real Google Chrome profile (if closed/not locked, only in production)
+        if is_frozen and os.path.isdir(chrome_profile_path):
             try:
                 emit("log", "Attempting to launch using real Google Chrome profile...", jobId="", status="filling")
                 context = playwright.chromium.launch_persistent_context(
@@ -721,8 +722,8 @@ def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path:
             except Exception as e:
                 emit("log", f"Could not load real Google Chrome profile (it may be open or locked): {e}", jobId="", status="filling")
         
-        # 2. Attempt to launch using persistent dedicated TalentScreen profile with Chrome channel
-        if not context:
+        # 2. Attempt to launch using persistent dedicated TalentScreen profile with Chrome channel (only in production)
+        if is_frozen and not context:
             try:
                 emit("log", f"Attempting to launch using persistent TalentScreen Chrome profile: {fallback_profile_path}", jobId="", status="filling")
                 os.makedirs(fallback_profile_path, exist_ok=True)

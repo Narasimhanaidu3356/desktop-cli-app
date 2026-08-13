@@ -126,12 +126,30 @@ export default function App() {
     setEvents([]);
     cursor.current = 0;
     try {
-      // Sidecar is already running from the ResumeSetup step — no need to start again.
-      // startBatch will fail with a clear error if it has crashed.
+      // 1. Ensure the sidecar is running (no-op if already running)
+      await automation.start();
+
+      // 2. Configure the sidecar if it is not set up yet (happens in mock mode or on HMR restarts)
+      const status = await automation.status().catch(() => ({ configured: false }));
+      if (!status.configured && resume && session) {
+        await automation.setup(resume, session.profile.email);
+      }
+
+      // 3. Start the batch run
       await automation.startBatch(jobsToApply);
       setRunning(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to start automation");
+      // Reset job states on failure so they don't look stuck in "opening_browser"
+      setJobStates((old) => {
+        const updated = { ...old };
+        for (const id of ids) {
+          if (updated[id] === "opening_browser") {
+            updated[id] = "";
+          }
+        }
+        return updated;
+      });
     }
   }
 

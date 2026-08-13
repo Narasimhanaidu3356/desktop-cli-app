@@ -88,6 +88,10 @@ export const automation = {
     }, 90_000);
   },
 
+  status() {
+    return localRequest<{ status: string; configured: boolean; running: boolean }>("/status", {}, 3_000);
+  },
+
   startBatch(jobs: Job[]) {
     return localRequest<{ runId: string }>("/batch", {
       method: "POST",

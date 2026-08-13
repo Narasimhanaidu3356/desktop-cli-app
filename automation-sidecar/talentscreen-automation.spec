@@ -15,6 +15,13 @@ datas = []
 if PLAYWRIGHT_PKG:
     datas.append((PLAYWRIGHT_PKG, "playwright"))
 
+try:
+    import gender_guesser as _gg
+    GENDER_GUESSER_DIR = str(Path(_gg.__file__).parent)
+    datas.append((GENDER_GUESSER_DIR, "gender_guesser"))
+except ImportError:
+    pass
+
 a = Analysis(
     ['main.py'],
     pathex=[],
