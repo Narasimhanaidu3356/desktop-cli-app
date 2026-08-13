@@ -38,7 +38,8 @@ def configure_playwright_env() -> None:
     # so Playwright never tries to locate one in PATH.
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
-        bundled_node = Path(meipass) / "playwright" / "driver" / "node.exe"
+        node_bin = "node.exe" if os.name == "nt" else "node"
+        bundled_node = Path(meipass) / "playwright" / "driver" / node_bin
         if bundled_node.is_file() and not os.getenv("PLAYWRIGHT_NODEJS_PATH"):
             os.environ["PLAYWRIGHT_NODEJS_PATH"] = str(bundled_node)
 

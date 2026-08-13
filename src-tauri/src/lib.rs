@@ -19,7 +19,7 @@ fn automation_server_running() -> bool {
     .is_ok()
 } 
 
-fn find_sidecar_launch_target(app: &tauri::AppHandle) -> Result<(Command, PathBuf), String> {
+fn find_sidecar_launch_target(app: &tauri::AppHandle) -> Result<(Command, Option<PathBuf>), String> {
     let binary_names = if cfg!(target_os = "windows") {
         vec!["talentscreen-automation.exe", "automation.exe", "main.exe"]
     } else {
@@ -104,7 +104,25 @@ fn find_sidecar_launch_target(app: &tauri::AppHandle) -> Result<(Command, PathBu
         }
 
         if let Some(script_path) = found_script {
-            let mut py_cmd = Command::new("python");
+            let py_exe = if cfg!(target_os = "windows") {
+                if Command::new("python").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok() {
+                    "python"
+                } else if Command::new("py").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok() {
+                    "py"
+                } else {
+                    "python"
+                }
+            } else {
+                if Command::new("python3").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok() {
+                    "python3"
+                } else if Command::new("python").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok() {
+                    "python"
+                } else {
+                    "python3"
+                }
+            };
+
+            let mut py_cmd = Command::new(py_exe);
             py_cmd.arg(&script_path);
             (py_cmd, script_path)
         } else {
@@ -156,14 +174,7 @@ fn find_sidecar_launch_target(app: &tauri::AppHandle) -> Result<(Command, PathBu
         }
     }
 
-    let browser_dir = found_browsers.unwrap_or_else(|| {
-        executable_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."))
-    });
-
-    Ok((command, browser_dir))
+    Ok((command, found_browsers))
 }
 
 #[tauri::command]
@@ -218,8 +229,11 @@ fn start_automation_sidecar(app: tauri::AppHandle, state: State<'_, AutomationPr
 
 
 
+    if let Some(ref browser_dir) = active_browser_dir {
+        command.env("PLAYWRIGHT_BROWSERS_PATH", browser_dir);
+    }
+
     let mut spawned = command
-        .env("PLAYWRIGHT_BROWSERS_PATH", &active_browser_dir)
         .env("TALENTSCREEN_SESSION_DIR", &session_dir)
         .stdin(Stdio::piped())
         .stdout(stdout_stdio)
@@ -246,7 +260,7 @@ fn start_automation_sidecar(app: tauri::AppHandle, state: State<'_, AutomationPr
             return Err(format!(
                 "automation sidecar exited immediately (code {:?}). browsers_path={} log={}",
                 status.code(),
-                active_browser_dir.display(),
+                active_browser_dir.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "None".into()),
                 if snippet.is_empty() { "(empty)".into() } else { snippet }
             ));
         }
