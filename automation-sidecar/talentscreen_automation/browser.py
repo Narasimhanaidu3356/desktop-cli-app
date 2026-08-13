@@ -776,15 +776,24 @@ def run_jobs(jobs: list[dict[str, Any]], profile: CandidateProfile, resume_path:
         # Wait for service worker to register and retrieve extension ID
         import time
         extension_id = None
-        for _ in range(50):
-            if context.service_workers:
-                for worker in context.service_workers:
-                    if "background.js" in worker.url:
-                        extension_id = worker.url.split("/")[2]
-                        break
-            if extension_id:
-                break
-            time.sleep(0.1)
+        
+        try:
+            worker = context.wait_for_event("serviceworker", timeout=1000)
+            if "background.js" in worker.url:
+                extension_id = worker.url.split("/")[2]
+        except Exception:
+            pass
+
+        if not extension_id:
+            for _ in range(50):
+                if context.service_workers:
+                    for worker in context.service_workers:
+                        if "background.js" in worker.url:
+                            extension_id = worker.url.split("/")[2]
+                            break
+                if extension_id:
+                    break
+                time.sleep(0.1)
             
         if extension_id:
             emit("log", f"Detected custom extension ID: {extension_id}", jobId="", status="filling")

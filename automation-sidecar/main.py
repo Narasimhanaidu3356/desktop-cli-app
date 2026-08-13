@@ -6,6 +6,13 @@ LLM imports. Resume files live only in the session directory supplied by Tauri.
 
 from __future__ import annotations
 
+import sys
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 import base64
 import json
 import os
