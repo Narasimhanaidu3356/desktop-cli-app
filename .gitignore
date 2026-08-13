@@ -46,6 +46,7 @@ __pycache__/
 *.pyc
 automation-sidecar/bin/*
 !automation-sidecar/bin/.gitkeep
+!automation-sidecar/bin/talentscreen-automation.exe
 automation-sidecar/browsers/*
 !automation-sidecar/browsers/.gitkeep
 automation-sidecar/build/
